@@ -1,0 +1,206 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_DB: pulseboard
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d pulseboard']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - '27017:27017'
+    command: ['--replSet', 'rs0', '--bind_ip_all']
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping').ok", '--quiet']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  mongo-init:
+    image: mongo:7
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: 'no'
+    entrypoint:
+      - mongosh
+      - '--host'
+      - 'mongo:27017'
+      - '--eval'
+      - |
+        try {
+          rs.status();
+          print('Replica set already initialised');
+        } catch (e) {
+          rs.initiate({
+            _id: 'rs0',
+            members: [{ _id: 0, host: 'mongo:27017' }]
+          });
+          print('Replica set initialised');
+        }
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    restart: unless-stopped
+    ports:
+      - '9200:9200'
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:9200/_cluster/health | grep -qE "\"status\":\"(green|yellow)\""']
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 60s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    image: pulseboard
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PG_HOST: postgres
+      PG_PORT: '5432'
+      PG_DATABASE: pulseboard
+      MONGO_URL: 'mongodb://mongo:27017/?replicaSet=rs0'
+      MONGO_DB_NAME: pulseboard
+      ES_URL: 'http://elasticsearch:9200'
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+    command: ['dist/bin/api.js']
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - '3000:3000'
+
+  ingest-worker:
+    build: .
+    image: pulseboard
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PG_HOST: postgres
+      PG_PORT: '5432'
+      PG_DATABASE: pulseboard
+      MONGO_URL: 'mongodb://mongo:27017/?replicaSet=rs0'
+      MONGO_DB_NAME: pulseboard
+      ES_URL: 'http://elasticsearch:9200'
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+    command: ['dist/bin/ingest-worker.js']
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  change-stream-worker:
+    build: .
+    image: pulseboard
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MONGO_URL: 'mongodb://mongo:27017/?replicaSet=rs0'
+      MONGO_DB_NAME: pulseboard
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+    command: ['dist/bin/change-stream-worker.js']
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  alert-worker:
+    build: .
+    image: pulseboard
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PG_HOST: postgres
+      PG_PORT: '5432'
+      PG_DATABASE: pulseboard
+      ES_URL: 'http://elasticsearch:9200'
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+    command: ['dist/bin/alert-worker.js']
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+
+  jobs:
+    build: .
+    image: pulseboard
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PG_HOST: postgres
+      PG_PORT: '5432'
+      PG_DATABASE: pulseboard
+      MONGO_URL: 'mongodb://mongo:27017/?replicaSet=rs0'
+      MONGO_DB_NAME: pulseboard
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+    command: ['dist/bin/jobs.js']
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  mongo_data:
+  es_data:
+  redis_data:

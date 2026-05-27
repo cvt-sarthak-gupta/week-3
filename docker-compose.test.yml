@@ -1,0 +1,94 @@
+version: '3.9'
+
+# Extends the base compose for integration testing.
+# Uses isolated ports so tests can run alongside a running dev stack.
+# Node services are intentionally absent — tests execute on the host via `npm run test:integration`.
+
+services:
+  postgres:
+    image: postgres:16
+    ports:
+      - '5433:5432'
+    environment:
+      POSTGRES_DB: pulseboard_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d pulseboard_test']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo:
+    image: mongo:7
+    ports:
+      - '27018:27017'
+    command: ['--replSet', 'rs0', '--bind_ip_all']
+    volumes:
+      - mongo_test_data:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping').ok", '--quiet']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  mongo-init:
+    image: mongo:7
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: 'no'
+    entrypoint:
+      - mongosh
+      - '--host'
+      - 'mongo:27017'
+      - '--eval'
+      - |
+        try {
+          rs.status();
+          print('Replica set already initialised');
+        } catch (e) {
+          rs.initiate({
+            _id: 'rs0',
+            members: [{ _id: 0, host: 'mongo:27017' }]
+          });
+          print('Replica set initialised');
+        }
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    ports:
+      - '9201:9200'
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - es_test_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:9200/_cluster/health | grep -qE "\"status\":\"(green|yellow)\""']
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 60s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6380:6379'
+    volumes:
+      - redis_test_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_test_data:
+  mongo_test_data:
+  es_test_data:
+  redis_test_data:
