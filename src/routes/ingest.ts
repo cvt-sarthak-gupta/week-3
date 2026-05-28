@@ -36,12 +36,21 @@ interface EventBody {
 // Helpers
 // ---------------------------------------------------------------------------
 
+const tenantPlanCache = new Map<string, { planId: string | null; cachedAt: number }>();
+const TENANT_PLAN_CACHE_TTL_MS = 5 * 60 * 1000;
+
 async function getTenantPlanId(tenantId: string): Promise<string | null> {
+  const cached = tenantPlanCache.get(tenantId);
+  if (cached !== undefined && Date.now() - cached.cachedAt < TENANT_PLAN_CACHE_TTL_MS) {
+    return cached.planId;
+  }
   const result = await pool.query<{ plan_id: string | null }>(
     'SELECT plan_id FROM tenants WHERE id = $1 LIMIT 1',
     [tenantId],
   );
-  return result.rows[0]?.plan_id ?? null;
+  const planId = result.rows[0]?.plan_id ?? null;
+  tenantPlanCache.set(tenantId, { planId, cachedAt: Date.now() });
+  return planId;
 }
 
 function todayKey(): string {
@@ -62,7 +71,9 @@ async function ingestSingleEvent(
   const occurredAt = event.occurredAt ?? new Date().toISOString();
   const fingerprint = event.fingerprint ?? `${event.type}:${event.message}`;
 
-  await redis.xadd(
+  const dateKey = todayKey();
+  const pipeline = redis.pipeline();
+  pipeline.xadd(
     STREAM_KEY,
     'MAXLEN',
     '~',
@@ -83,9 +94,8 @@ async function ingestSingleEvent(
     'deviceContext', event.deviceContext !== undefined ? JSON.stringify(event.deviceContext) : '',
     'payload', event.payload !== undefined ? JSON.stringify(event.payload) : '',
   );
-
-  const dateKey = todayKey();
-  await redis.zincrby(`leaderboard:${dateKey}`, 1, projectId);
+  pipeline.zincrby(`leaderboard:${dateKey}`, 1, projectId);
+  await pipeline.exec();
 
   return { eventId, traceId };
 }

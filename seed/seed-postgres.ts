@@ -7,7 +7,16 @@
  */
 
 import pg from 'pg';
+import { randomBytes, scrypt } from 'node:crypto';
+import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
+
+const scryptAsync = promisify(scrypt);
+async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16).toString('hex');
+  const key = await scryptAsync(password, salt, 64) as Buffer;
+  return `${salt}:${key.toString('hex')}`;
+}
 
 // ---------------------------------------------------------------------------
 // DB connection (standalone — does NOT import src/config.ts)
@@ -387,6 +396,52 @@ export async function seedPostgres(): Promise<void> {
 
     // Re-enable triggers
     await client.query('SET session_replication_role = DEFAULT');
+
+    // ── Load-test fixtures (deterministic IDs used by tests/load/run.ts) ──────
+    // These are inserted with ON CONFLICT DO NOTHING so the seed is idempotent.
+    // The matching defaults live in tests/load/run.ts and tests/load/ingest.k6.js
+    console.log('[postgres] Seeding load-test fixtures…');
+    const LT_PLAN_ID    = '00000000-0000-0000-0000-000000000001';
+    const LT_TENANT_ID  = '00000000-0000-0000-0000-000000000002';
+    const LT_PROJECT_ID = '00000000-0000-0000-0000-000000000003';
+    const LT_API_KEY    = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    const LT_USER_ID    = '00000000-0000-0000-0000-000000000004';
+    const LT_EMAIL      = 'loadtest@example.com';
+    const LT_PASSWORD   = 'Password123!';
+
+    // 432_000_000 / 43_200 min-per-month = 10_000/min — matches load test target
+    await client.query(`
+      INSERT INTO plans (id, name, event_quota_per_month, retention_days, max_projects, price_cents)
+      VALUES ($1, 'LoadTest', 432000000, 365, 100, 0)
+      ON CONFLICT (id) DO UPDATE SET event_quota_per_month = EXCLUDED.event_quota_per_month
+    `, [LT_PLAN_ID]);
+
+    await client.query(`
+      INSERT INTO tenants (id, name, slug, plan_id, is_active)
+      VALUES ($1, 'Load Test Tenant', 'load-test-tenant', $2, true)
+      ON CONFLICT (id) DO NOTHING
+    `, [LT_TENANT_ID, LT_PLAN_ID]);
+
+    await client.query(`
+      INSERT INTO projects (id, tenant_id, name, slug, api_key, is_archived)
+      VALUES ($1, $2, 'Load Test Project', 'load-test-project', $3, false)
+      ON CONFLICT (id) DO NOTHING
+    `, [LT_PROJECT_ID, LT_TENANT_ID, LT_API_KEY]);
+
+    const ltPasswordHash = await hashPassword(LT_PASSWORD);
+    await client.query(`
+      INSERT INTO users (id, email, password_hash, full_name)
+      VALUES ($1, $2, $3, 'Load Test User')
+      ON CONFLICT (id) DO NOTHING
+    `, [LT_USER_ID, LT_EMAIL, ltPasswordHash]);
+
+    await client.query(`
+      INSERT INTO tenant_members (user_id, tenant_id, role)
+      VALUES ($1, $2, 'owner')
+      ON CONFLICT (user_id, tenant_id) DO NOTHING
+    `, [LT_USER_ID, LT_TENANT_ID]);
+
+    console.log(`[postgres]   load-test project ready  api_key=${LT_API_KEY}  email=${LT_EMAIL}`);
 
     console.log('[postgres] Done.');
     console.log(`[postgres] Summary:`);

@@ -7,11 +7,13 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "dev:api": "tsx watch src/bin/api.ts",
-    "dev:ingest-worker": "tsx watch src/bin/ingest-worker.ts",
-    "dev:change-stream-worker": "tsx watch src/bin/change-stream-worker.ts",
-    "dev:alert-worker": "tsx watch src/bin/alert-worker.ts",
-    "dev:jobs": "tsx watch src/bin/jobs.ts",
+    "doctor": "tsx bin/doctor.ts",
+    "dev:api": "tsx watch bin/api.ts",
+    "dev:ingest-worker": "tsx watch bin/ingest-worker.ts",
+    "dev:change-stream": "tsx watch bin/change-stream-worker.ts",
+    "dev:change-stream-worker": "tsx watch bin/change-stream-worker.ts",
+    "dev:alert-worker": "tsx watch bin/alert-worker.ts",
+    "dev:jobs": "tsx watch bin/jobs.ts",
     "build": "tsc --project tsconfig.json",
     "start:api": "node dist/bin/api.js",
     "start:ingest-worker": "node dist/bin/ingest-worker.js",
@@ -22,6 +24,10 @@
     "seed": "node --env-file=.env --import tsx/esm seed/index.ts",
     "test:integration": "vitest run --config vitest.config.ts",
     "test:load": "tsx tests/load/run.ts",
+    "test:load:spike": "tsx tests/load/run.ts --spike",
+    "test:load:soak": "tsx tests/load/run.ts --soak",
+    "test:load:extended": "EXTENDED=1 tsx tests/load/run.ts --spike --soak",
+    "test:load:batch": "BATCH_SIZE=5 tsx tests/load/run.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

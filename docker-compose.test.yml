@@ -1,5 +1,10 @@
 version: '3.9'
 
+# Isolated test-stack — runs under project name "pulseboard-test" so it never
+# conflicts with the main "week3" compose stack. Both stacks can run at the
+# same time; they use different container names and different host ports.
+name: pulseboard-test
+
 # Extends the base compose for integration testing.
 # Uses isolated ports so tests can run alongside a running dev stack.
 # Node services are intentionally absent — tests execute on the host via `npm run test:integration`.

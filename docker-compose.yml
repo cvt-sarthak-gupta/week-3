@@ -145,12 +145,17 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      PG_HOST: postgres
+      PG_PORT: '5432'
+      PG_DATABASE: pulseboard
       MONGO_URL: 'mongodb://mongo:27017/?replicaSet=rs0'
       MONGO_DB_NAME: pulseboard
       REDIS_HOST: redis
       REDIS_PORT: '6379'
     command: ['dist/bin/change-stream-worker.js']
     depends_on:
+      postgres:
+        condition: service_healthy
       mongo:
         condition: service_healthy
       redis:
@@ -188,6 +193,7 @@ services:
       PG_DATABASE: pulseboard
       MONGO_URL: 'mongodb://mongo:27017/?replicaSet=rs0'
       MONGO_DB_NAME: pulseboard
+      ES_URL: 'http://elasticsearch:9200'
       REDIS_HOST: redis
       REDIS_PORT: '6379'
     command: ['dist/bin/jobs.js']
@@ -195,6 +201,8 @@ services:
       postgres:
         condition: service_healthy
       mongo:
+        condition: service_healthy
+      elasticsearch:
         condition: service_healthy
       redis:
         condition: service_healthy

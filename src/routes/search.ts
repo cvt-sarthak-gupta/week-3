@@ -41,7 +41,13 @@ interface EsHit {
 // Membership guard
 // ---------------------------------------------------------------------------
 
+const MEMBER_CACHE_TTL_SECONDS = 300;
+
 async function assertMember(userId: string, tenantId: string): Promise<void> {
+  const cacheKey = `member:${tenantId}:${userId}`;
+  const cached = await redis.get(cacheKey).catch(() => null);
+  if (cached !== null) return;
+
   const result = await pool.query<MemberRow>(
     'SELECT user_id FROM tenant_members WHERE tenant_id = $1 AND user_id = $2 LIMIT 1',
     [tenantId, userId],
@@ -49,6 +55,8 @@ async function assertMember(userId: string, tenantId: string): Promise<void> {
   if (result.rows[0] === undefined) {
     throw new ForbiddenError('Not a member of this tenant');
   }
+
+  void redis.set(cacheKey, '1', 'EX', MEMBER_CACHE_TTL_SECONDS).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -182,16 +190,28 @@ const searchPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance)
       const alias = aliasName(projectId);
       const searchCacheKey = `search:${projectId}:${Buffer.from(JSON.stringify({ q, severity, from, to, cursor, pageSize })).toString('base64')}`;
 
-      // X5: If ES circuit is open, try returning the last cached result (up to 1 hour stale)
+      // Check cache first — serves fresh hits on the normal path and stale hits (X5) when ES is down
+      const cachedResult = await redis.get(searchCacheKey).catch(() => null);
       const esCircuitOpen = breakers.elasticsearch.getState() === 'open';
-      if (esCircuitOpen) {
-        const staleResult = await redis.get(searchCacheKey).catch(() => null);
-        if (staleResult !== null) {
+
+      if (cachedResult !== null) {
+        const cached = JSON.parse(cachedResult) as Record<string, unknown>;
+        if (esCircuitOpen) {
           logger.warn({ projectId }, 'ES down — serving stale cached search result (X5)');
-          void reply.status(206).header('X-Cache', 'STALE').send(JSON.parse(staleResult));
-          return;
+          void reply
+            .status(206)
+            .header('X-Cache', 'STALE')
+            .send({ ...cached, cacheHit: true, stale: true });
+        } else {
+          void reply
+            .status(200)
+            .header('X-Cache', 'HIT')
+            .send({ ...cached, cacheHit: true });
         }
-        // No cached result available
+        return;
+      }
+
+      if (esCircuitOpen) {
         void reply
           .status(503)
           .header('Retry-After', '60')
@@ -225,13 +245,8 @@ const searchPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance)
           }),
         );
       } catch (err) {
-        // ES went down mid-request — check stale cache then 503
+        // ES went down mid-request — cache was already checked above (miss), return 503
         logger.warn({ err, projectId }, 'ES search failed (X5 degradation)');
-        const staleResult = await redis.get(searchCacheKey).catch(() => null);
-        if (staleResult !== null) {
-          void reply.status(206).header('X-Cache', 'STALE').send(JSON.parse(staleResult));
-          return;
-        }
         void reply
           .status(503)
           .header('Retry-After', '60')
@@ -264,7 +279,10 @@ const searchPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance)
         .set(searchCacheKey, JSON.stringify(responseBody), 'EX', 3600)
         .catch(() => {});
 
-      void reply.status(200).header('X-Cache', 'MISS').send(responseBody);
+      void reply
+        .status(200)
+        .header('X-Cache', 'MISS')
+        .send({ ...responseBody, cacheHit: false });
     },
   );
 };

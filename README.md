@@ -27,13 +27,16 @@ docker compose up -d postgres mongo elasticsearch redis
 # 2. Install dependencies
 npm install
 
-# 3. Run migrations
+# 3. Verify everything is wired up correctly
+npm run doctor
+
+# 4. Run migrations
 npm run migrate
 
-# 4. Seed all four stores (~5–10 min)
+# 5. Seed all four stores (~5–10 min)
 npm run seed
 
-# 5. Start all services
+# 6. Start all services
 docker compose up -d api ingest-worker change-stream-worker alert-worker jobs
 
 # API is available at http://localhost:3000
@@ -43,13 +46,23 @@ docker compose up -d api ingest-worker change-stream-worker alert-worker jobs
 
 ## Development (individual services)
 
+The `.env` file is pre-configured for the **test stack** (isolated ports that don't conflict with a locally-installed Postgres or the production Docker stack).
+
 ```bash
+# Start the test-stack datastores
+docker compose -f docker-compose.test.yml up -d
+
+# Verify everything before you start coding
+npm run doctor
+
 npm run dev:api               # Fastify API server (port 3000)
 npm run dev:ingest-worker     # XREADGROUP consumer
 npm run dev:change-stream     # Mongo change stream → Redis pub/sub
 npm run dev:alert-worker      # PSUBSCRIBE alerts:fatal:* + dedup
 npm run dev:jobs              # Cron dispatcher
 ```
+
+> **Why test-stack ports?**  A locally-installed Postgres binds `127.0.0.1:5432` and shadows Docker's port-mapped container. The test stack uses `5433/27018/9201/6380` to sidestep all conflicts. The `docker-compose.yml` services always override host/port with Docker service names, so the `.env` values only matter when running services locally.
 
 ## Running Tests
 
