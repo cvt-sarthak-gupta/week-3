@@ -149,7 +149,7 @@ beforeAll(async () => {
     userContext: i % 3 === 0 ? { userId: `user-${i % 50}` } : undefined,
     payload: {},
   }))
-  await db.collection('events').insertMany(eventsToInsert, { ordered: false }).catch(() => {})
+  await db.collection('events').insertMany(eventsToInsert as any[], { ordered: false }).catch(() => {})
 
   // Seed Elasticsearch documents for E3
   const es = getEsClient()
@@ -272,12 +272,12 @@ describe('X4-M3: MongoDB Error Intelligence Pipeline Performance', () => {
       explain: { aggregate: 'events', pipeline, cursor: {} },
       verbosity: 'executionStats',
     })
-    const execStats = explainResult?.stages?.[0]?.['$cursor']?.executionStats ?? explainResult?.executionStats ?? {}
+    const execStats = (explainResult?.['stages']?.[0]?.['$cursor']?.['executionStats'] ?? explainResult?.['executionStats'] ?? {}) as Record<string, unknown>
     console.log('\n[X4-M3] executionStats:', JSON.stringify({
-      nReturned:          execStats.nReturned ?? 'n/a',
-      totalDocsExamined:  execStats.totalDocsExamined ?? 'n/a',
-      totalKeysExamined:  execStats.totalKeysExamined ?? 'n/a',
-      executionTimeMillis: execStats.executionTimeMillis ?? 'n/a',
+      nReturned:          execStats['nReturned'] ?? 'n/a',
+      totalDocsExamined:  execStats['totalDocsExamined'] ?? 'n/a',
+      totalKeysExamined:  execStats['totalKeysExamined'] ?? 'n/a',
+      executionTimeMillis: execStats['executionTimeMillis'] ?? 'n/a',
     }, null, 2))
 
     // Timed production run
