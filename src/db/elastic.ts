@@ -176,6 +176,11 @@ export class ElasticsearchDatabase {
             message: {
               type: 'text',
               analyzer: 'logs_analyzer',
+              fields: {
+                // keyword sub-field enables terms/significant_terms aggregations
+                // on full message strings (ignore_above prevents over-large tokens).
+                keyword: { type: 'keyword', ignore_above: 256 },
+              },
             },
             severity: {
               type: 'keyword',

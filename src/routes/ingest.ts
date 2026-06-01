@@ -99,7 +99,15 @@ export function ingestRoutes(container: AppContainer): FastifyPluginAsync {
       pipeline.zincrby(leaderboardKey, 1, projectId);
       // Expire at midnight UTC so yesterday's leaderboard is auto-cleaned
       pipeline.expireat(leaderboardKey, midnightUnixSeconds);
-      await pipeline.exec();
+      const results = await pipeline.exec();
+
+      // xadd is the first command in the pipeline (index 0).
+      // If it failed (e.g. Redis OOM / stream MAXLEN), surface the error so the
+      // HTTP handler returns 5xx instead of 202 Accepted for a dropped event.
+      const xaddErr = results?.[0]?.[0];
+      if (xaddErr instanceof Error) {
+        throw xaddErr;
+      }
 
       return { eventId, traceId };
     }

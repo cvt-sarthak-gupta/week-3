@@ -154,6 +154,21 @@ export class ChangeStreamWorker {
           break;
         }
 
+        // Persist resume token BEFORE publishing so that on a crash-and-restart
+        // the stream reopens past this event (at-most-once delivery per event).
+        // Duplicate webhook fires are already prevented by the dedup-fire lock in
+        // AlertService.fireDedupAlert(), so missing one publish is preferable to
+        // creating duplicate incidents. This is the standard "checkpoint then act"
+        // pattern for stream processors.
+        const resumeId = event._id;
+        if (resumeId !== null && resumeId !== undefined) {
+          await this.redis.client
+            .hset(RESUME_HASH_KEY, 'token', JSON.stringify(resumeId))
+            .catch((err: unknown) => {
+              log.warn({ err }, 'Failed to persist resume token');
+            });
+        }
+
         // Publish insert events with a fullDocument to Redis pub/sub
         if ('fullDocument' in event && event.fullDocument !== null && event.fullDocument !== undefined) {
           const fullDoc = event.fullDocument as unknown as { projectId?: string; _id?: unknown; [key: string]: unknown };
@@ -165,16 +180,6 @@ export class ChangeStreamWorker {
             });
             log.debug({ projectId, eventId: fullDoc['_id'] }, 'Fatal event published');
           }
-        }
-
-        // Persist resume token in Redis HASH
-        const resumeId = event._id;
-        if (resumeId !== null && resumeId !== undefined) {
-          await this.redis.client
-            .hset(RESUME_HASH_KEY, 'token', JSON.stringify(resumeId))
-            .catch((err: unknown) => {
-              log.warn({ err }, 'Failed to persist resume token');
-            });
         }
       }
     } catch (err) {

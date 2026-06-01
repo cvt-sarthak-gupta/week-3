@@ -254,13 +254,19 @@ export class IngestionService {
         await this.breakers.elasticsearch.run(async () => {
           await this.es.ensureSetup(); // registers our template to override built-in data-stream template
           const idx = this.es.indexName(projectId, doc.occurredAt);
-          // Exclude _id: it's a MongoDB metadata field that ES rejects in document body.
-          const { _id: _mongoId, ...docForEs } = doc;
+          // Exclude _id (Mongo metadata) and tags (needs format conversion for ES).
+          const { _id: _mongoId, tags: _mongoTags, ...docForEsBase } = doc;
+          // ES mapping defines tags as nested[{key,value}] but EventDocument stores
+          // tags as Record<string,string>. Convert before indexing so nested queries work.
+          const tagsForEs = _mongoTags !== undefined
+            ? Object.entries(_mongoTags).map(([key, value]) => ({ key, value }))
+            : undefined;
           await this.es.client.index({
             index: idx,
             id: eventId,
             document: {
-              ...docForEs,
+              ...docForEsBase,
+              ...(tagsForEs !== undefined ? { tags: tagsForEs } : {}),
               occurredAt: doc.occurredAt.toISOString(),
               ingestedAt: doc.ingestedAt.toISOString(),
             },

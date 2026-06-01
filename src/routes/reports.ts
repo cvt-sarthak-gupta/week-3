@@ -3,8 +3,6 @@ import fp from 'fastify-plugin';
 import { AppContainer } from '../container.js';
 import { ForbiddenError } from '../errors.js';
 
-const REPORT_CACHE_TTL_SECONDS = 300; // 5 minutes
-
 interface ProjectParams {
   tenantId: string;
   projectId: string;
@@ -73,13 +71,11 @@ export function reportRoutes(container: AppContainer): FastifyPluginAsync {
 
         await assertMember(userId, tenantId);
 
-        const cacheKey = `report:${projectId}:error-intel:${days}`;
-
-        const report = await container.cache.getOrFill(
-          cacheKey,
-          REPORT_CACHE_TTL_SECONDS,
-          () => container.reports.getErrorIntelligenceReport(projectId, days),
-        );
+        // ReportService.getErrorIntelligenceReport already caches with the key
+        // 'report:error-intelligence:{projectId}:{days}' and handles invalidation
+        // via invalidateProjectReports(). A second getOrFill here with a different
+        // key pattern would create stale entries that are never evicted.
+        const report = await container.reports.getErrorIntelligenceReport(projectId, days);
 
         void reply.status(200).send(report);
       },
@@ -106,13 +102,9 @@ export function reportRoutes(container: AppContainer): FastifyPluginAsync {
 
         await assertMember(userId, tenantId);
 
-        const cacheKey = `report:${projectId}:dashboard`;
-
-        const report = await container.cache.getOrFill(
-          cacheKey,
-          REPORT_CACHE_TTL_SECONDS,
-          () => container.reports.getDashboardReport(projectId),
-        );
+        // ReportService.getDashboardReport caches with key 'report:dashboard:{projectId}'.
+        // Wrapping again with a different key would bypass invalidation.
+        const report = await container.reports.getDashboardReport(projectId);
 
         void reply.status(200).send(report);
       },

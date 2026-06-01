@@ -1,6 +1,7 @@
 import { STREAM_KEY, DLQ_KEY, CONSUMER_GROUP } from '../db/redis.js';
 import type { RedisDatabase } from '../db/redis.js';
 import type { IngestionService, IngestPayload } from '../domain/ingestion.js';
+import type { EventIngest } from '../schemas/event.js';
 import { createWorkerLogger } from '../logger.js';
 
 /**
@@ -117,14 +118,31 @@ export class IngestConsumer {
         const retryKey = `retry:${msgId}`;
 
         try {
-          // Parse and dispatch the event payload
+          // Reconstruct raw EventIngest from the individual flat fields the ingest
+          // route writes to the stream (it never writes a single 'raw' JSON blob).
+          const safeJsonParse = <T>(s: string | undefined): T | undefined => {
+            if (!s) return undefined;
+            try { return JSON.parse(s) as T; } catch { return undefined; }
+          };
+
           const payload: IngestPayload = {
-            eventId: data['eventId'] ?? msgId,
-            traceId: data['traceId'] ?? '',
+            eventId:   data['eventId']  ?? msgId,
+            traceId:   data['traceId']  ?? '',
             projectId: data['projectId'] ?? '',
-            tenantId: data['tenantId'] ?? '',
-            planId: data['planId'] ?? '',
-            raw: JSON.parse(data['raw'] ?? '{}') as IngestPayload['raw'],
+            tenantId:  data['tenantId'] ?? '',
+            planId:    data['planId']   ?? '',
+            raw: {
+              type:          (data['type']     ?? 'custom') as EventIngest['type'],
+              severity:      (data['severity'] ?? 'info')   as EventIngest['severity'],
+              message:        data['message']  ?? '',
+              ...(data['occurredAt']    ? { occurredAt:    data['occurredAt'] }                                                  : {}),
+              ...(data['fingerprint']   ? { fingerprint:   data['fingerprint'] }                                                 : {}),
+              ...(data['stackTrace']    ? { stackTrace:    safeJsonParse<EventIngest['stackTrace']>(data['stackTrace']) }        : {}),
+              ...(data['tags']          ? { tags:          safeJsonParse<EventIngest['tags']>(data['tags']) }                    : {}),
+              ...(data['userContext']   ? { userContext:   safeJsonParse<EventIngest['userContext']>(data['userContext']) }       : {}),
+              ...(data['deviceContext'] ? { deviceContext: safeJsonParse<EventIngest['deviceContext']>(data['deviceContext']) }  : {}),
+              ...(data['payload']       ? { payload:       safeJsonParse<EventIngest['payload']>(data['payload']) }              : {}),
+            },
           };
 
           await this.ingestion.processEvent(payload);
@@ -152,9 +170,19 @@ export class IngestConsumer {
             dlqFields.push('failed_at', new Date().toISOString());
             dlqFields.push('error', procErr instanceof Error ? procErr.message : String(procErr));
 
-            await this.redis.client.xadd(DLQ_KEY, '*', ...dlqFields);
-            await this.redis.client.xack(STREAM_KEY, CONSUMER_GROUP, msgId);
-            await this.redis.client.del(retryKey);
+            // Write to DLQ first; only ACK if the DLQ write succeeded.
+            // Using a pipeline reduces the crash window but xadd result is checked
+            // explicitly so a Redis OOM doesn't silently lose the message.
+            const dlqPipeline = this.redis.client.pipeline();
+            dlqPipeline.xadd(DLQ_KEY, '*', ...dlqFields);
+            const dlqResults = await dlqPipeline.exec();
+            const dlqErr = dlqResults?.[0]?.[0];
+            if (dlqErr instanceof Error) {
+              log.error({ err: dlqErr, msgId }, 'DLQ write failed — retaining in PEL for reclaim');
+            } else {
+              await this.redis.client.xack(STREAM_KEY, CONSUMER_GROUP, msgId);
+              await this.redis.client.del(retryKey);
+            }
           }
           // If under retry limit, do not ACK — message stays in PEL for reclaim
         }

@@ -281,8 +281,11 @@ export class AlertService {
     // 1. Load dedup-fire Lua script
     const script = await this.redis.loadLua('dedup-fire');
 
-    // 2. Attempt to acquire the dedup lock
-    const lockKey = `fire-lock:${alertRuleId}:${eventId}`;
+    // 2. Attempt to acquire the dedup lock.
+    // Key is per-alertRuleId only — not per-eventId — so that a burst of events
+    // matching the same rule within the TTL window fires exactly one webhook
+    // instead of one per event. The TTL (60 s) acts as the cooldown period.
+    const lockKey = `fire-lock:${alertRuleId}`;
     const nodeId = process.env['HOSTNAME'] ?? nanoid(8);
     const TTL = 60;
 
