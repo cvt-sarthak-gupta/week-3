@@ -125,12 +125,40 @@ function createBreaker(name: string, opts?: BreakerConfig): Breaker {
   return { run, getState, getMetrics };
 }
 
-export const breakers: Readonly<Record<'postgres' | 'mongo' | 'elasticsearch' | 'redis', Breaker>> =
-  Object.freeze({
-    postgres: createBreaker('postgres'),
-    mongo: createBreaker('mongo'),
-    elasticsearch: createBreaker('elasticsearch'),
-    redis: createBreaker('redis'),
-  });
+export class CircuitBreaker implements Breaker {
+  private readonly _breaker: Breaker;
+
+  constructor(name: string, opts?: BreakerConfig) {
+    this._breaker = createBreaker(name, opts);
+  }
+
+  run<T>(fn: () => Promise<T>): Promise<T> {
+    return this._breaker.run(fn);
+  }
+
+  getState(): BreakerState {
+    return this._breaker.getState();
+  }
+
+  getMetrics(): BreakerMetrics {
+    return this._breaker.getMetrics();
+  }
+}
+
+export class CircuitBreakerRegistry {
+  readonly postgres: CircuitBreaker;
+  readonly mongo: CircuitBreaker;
+  readonly elasticsearch: CircuitBreaker;
+  readonly redis: CircuitBreaker;
+
+  constructor() {
+    this.postgres = new CircuitBreaker('postgres');
+    this.mongo = new CircuitBreaker('mongo');
+    this.elasticsearch = new CircuitBreaker('elasticsearch');
+    this.redis = new CircuitBreaker('redis');
+  }
+}
+
+export const breakers = new CircuitBreakerRegistry();
 
 export { createBreaker };

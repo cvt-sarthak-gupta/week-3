@@ -5,35 +5,25 @@
  * with built-in leader election.
  */
 
-import * as pgDb from '../src/db/postgres.js';
-import * as mongoDb from '../src/db/mongo.js';
-import * as redisDb from '../src/db/redis.js';
-import { runChangeStreamWorker } from '../src/workers/change-stream.js';
+import { config } from '../src/config.js';
+import { AppContainer } from '../src/container.js';
+import { ChangeStreamWorker } from '../src/workers/change-stream.js';
 import { logger } from '../src/logger.js';
 
 async function main(): Promise<void> {
   logger.info('Change stream worker booting');
 
-  // Connect all data stores
-  await redisDb.connect();
-  await mongoDb.connect();
-
-  // PG pool connects lazily — verify with a health check
-  const pgHealth = await pgDb.healthCheck();
-  if (!pgHealth.ok) {
-    logger.error({ pgHealth }, 'PostgreSQL health check failed at startup');
-    process.exit(1);
-  }
-
+  const container = new AppContainer(config);
+  await container.initialize();
   logger.info('All DBs ready — starting change stream worker');
+
+  const worker = new ChangeStreamWorker(container.mongo, container.redis);
 
   // Graceful shutdown
   const shutdown = async (): Promise<void> => {
     logger.info('Shutting down change stream worker');
-    await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
-    await redisDb.close();
-    await mongoDb.close();
-    await pgDb.close();
+    await worker.stop();
+    await container.close();
     logger.info('Change stream worker shutdown complete');
     process.exit(0);
   };
@@ -45,10 +35,8 @@ async function main(): Promise<void> {
     });
   });
 
-  // Run the change stream worker (blocks until SIGTERM)
-  await runChangeStreamWorker();
-
-  await shutdown();
+  // Run the change stream worker (blocks until stopped)
+  await worker.start();
 }
 
 main().catch((err: unknown) => {

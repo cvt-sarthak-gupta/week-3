@@ -1,8 +1,12 @@
-import { runRetentionJob } from '../domain/retention.js';
+import { RetentionService } from '../domain/retention.js';
 import { logger } from '../logger.js';
 
-export async function retentionJob(): Promise<void> {
-  logger.info('Retention job starting');
-  const result = await runRetentionJob();
-  logger.info({ result }, 'Retention job complete');
+export class RetentionJob {
+  constructor(private readonly retention: RetentionService) {}
+
+  async run(): Promise<void> {
+    logger.info('Retention job starting');
+    await this.retention.runRetentionJob();
+    logger.info('Retention job complete');
+  }
 }

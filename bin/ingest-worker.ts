@@ -5,11 +5,9 @@
  * then starts the Redis Stream consumer loop.
  */
 
-import * as pgDb from '../src/db/postgres.js';
-import * as mongoDb from '../src/db/mongo.js';
-import * as redisDb from '../src/db/redis.js';
-import * as esDb from '../src/db/elastic.js';
-import { runIngestConsumer } from '../src/workers/ingest-consumer.js';
+import { config } from '../src/config.js';
+import { AppContainer } from '../src/container.js';
+import { IngestConsumer } from '../src/workers/ingest-consumer.js';
 import { logger } from '../src/logger.js';
 
 const workerIndex = process.env['WORKER_INDEX'] ?? '0';
@@ -18,30 +16,17 @@ const workerName = `worker-${workerIndex}`;
 async function main(): Promise<void> {
   logger.info({ workerName }, 'Ingest worker booting');
 
-  // Connect all data stores
-  await redisDb.connect();
-  await mongoDb.connect();
-  // ES client connects lazily; ensure ILM policies exist
-  await esDb.ensureIlmPolicies();
-
-  // PG pool connects lazily — verify with a health check
-  const pgHealth = await pgDb.healthCheck();
-  if (!pgHealth.ok) {
-    logger.error({ pgHealth }, 'PostgreSQL health check failed at startup');
-    process.exit(1);
-  }
-
+  const container = new AppContainer(config);
+  await container.initialize();
   logger.info({ workerName }, 'All DBs ready — starting ingest consumer');
 
-  // Graceful shutdown: close DBs after consumer exits
+  const worker = new IngestConsumer(container.redis, container.ingestion);
+
+  // Graceful shutdown
   const shutdown = async (): Promise<void> => {
     logger.info({ workerName }, 'Shutting down ingest worker');
-    // Give the consumer loop a moment to finish in-flight messages
-    await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
-    await redisDb.close();
-    await mongoDb.close();
-    await esDb.close();
-    await pgDb.close();
+    await worker.stop();
+    await container.close();
     logger.info({ workerName }, 'Ingest worker shutdown complete');
     process.exit(0);
   };
@@ -53,10 +38,8 @@ async function main(): Promise<void> {
     });
   });
 
-  // Run the consumer (blocks until SIGTERM)
-  await runIngestConsumer(workerName);
-
-  await shutdown();
+  // Run the consumer (blocks until stopped)
+  await worker.start();
 }
 
 main().catch((err: unknown) => {

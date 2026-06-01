@@ -15,8 +15,8 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { Client as ESClient } from '@elastic/elasticsearch'
-import { processEvent } from '../../src/domain/ingestion.js'
 import {
+  processEvent,
   setupTestDatabases,
   teardownTestDatabases,
   createTestTenant,

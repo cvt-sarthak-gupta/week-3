@@ -1,9 +1,6 @@
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
-import { healthCheck as pgHealthCheck } from '../db/postgres.js';
-import { healthCheck as mongoHealthCheck } from '../db/mongo.js';
-import { healthCheck as esHealthCheck } from '../db/elastic.js';
-import { healthCheck as redisHealthCheck } from '../db/redis.js';
+import type { AppContainer } from '../container.js';
 
 interface DatastoreChecks {
   postgres: boolean;
@@ -35,52 +32,49 @@ async function withTimeout<T>(
   ]);
 }
 
-const healthPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance) => {
-  fastify.get(
-    '/health',
-    { schema: { tags: ['health'] } },
-    async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-      void reply.status(200).send({ ok: true, timestamp: new Date().toISOString() });
-    },
-  );
+export function healthRoutes(container: AppContainer): FastifyPluginAsync {
+  return fp(async (fastify) => {
+    fastify.get(
+      '/health',
+      { schema: { tags: ['health'] } },
+      async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+        void reply.status(200).send({ ok: true, timestamp: new Date().toISOString() });
+      },
+    );
 
-  fastify.get(
-    '/ready',
-    { schema: { tags: ['health'] } },
-    async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-      const fallback: ReadyCheck = { ok: false, latencyMs: HEALTH_TIMEOUT_MS };
+    fastify.get(
+      '/ready',
+      { schema: { tags: ['health'] } },
+      async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+        const fallback: ReadyCheck = { ok: false, latencyMs: HEALTH_TIMEOUT_MS };
 
-      const [pgResult, mongoResult, esResult, redisResult] = await Promise.allSettled([
-        withTimeout(pgHealthCheck(), fallback),
-        withTimeout(mongoHealthCheck(), fallback),
-        withTimeout(esHealthCheck(), fallback),
-        withTimeout(redisHealthCheck(), fallback),
-      ]);
+        const [pgResult, mongoResult, esResult, redisResult] = await Promise.allSettled([
+          withTimeout(container.pg.healthCheck(), fallback),
+          withTimeout(container.mongo.healthCheck(), fallback),
+          withTimeout(container.es.healthCheck(), fallback),
+          withTimeout(container.redis.healthCheck(), fallback),
+        ]);
 
-      const pg = pgResult.status === 'fulfilled' ? pgResult.value.ok : false;
-      const mongo = mongoResult.status === 'fulfilled' ? mongoResult.value.ok : false;
-      const es = esResult.status === 'fulfilled' ? esResult.value.ok : false;
-      const redis = redisResult.status === 'fulfilled' ? redisResult.value.ok : false;
+        const pg = pgResult.status === 'fulfilled' ? pgResult.value.ok : false;
+        const mongo = mongoResult.status === 'fulfilled' ? mongoResult.value.ok : false;
+        const es = esResult.status === 'fulfilled' ? esResult.value.ok : false;
+        const redis = redisResult.status === 'fulfilled' ? redisResult.value.ok : false;
 
-      const allOk = pg && mongo && es && redis;
+        const allOk = pg && mongo && es && redis;
 
-      const body: HealthResponse = {
-        ok: allOk,
-        checks: {
-          postgres: pg,
-          mongo,
-          elasticsearch: es,
-          redis,
-        },
-        timestamp: new Date().toISOString(),
-      };
+        const body: HealthResponse = {
+          ok: allOk,
+          checks: {
+            postgres: pg,
+            mongo,
+            elasticsearch: es,
+            redis,
+          },
+          timestamp: new Date().toISOString(),
+        };
 
-      void reply.status(allOk ? 200 : 503).send(body);
-    },
-  );
-};
-
-export const healthRoutes = fp(healthPluginHandler, {
-  name: 'health-routes',
-  fastify: '4.x',
-});
+        void reply.status(allOk ? 200 : 503).send(body);
+      },
+    );
+  }, { name: 'health-routes', fastify: '4.x' });
+}

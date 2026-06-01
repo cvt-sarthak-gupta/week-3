@@ -2,22 +2,20 @@
  * PulseBoard scheduled jobs runner.
  *
  * Schedule:
- *   - retentionJob:        every hour
- *   - ensurePartitionsJob: daily at midnight (00:00 UTC)
- *   - applyIlmJob:         daily at 01:00 UTC
+ *   - PartitionJob:  daily at 00:05 UTC
+ *   - IlmApplyJob:   daily at 01:00 UTC
+ *   - RetentionJob:  daily at 02:00 UTC
  *
  * Uses hand-rolled setInterval / setTimeout scheduling (node-cron is available
  * in deps but hand-rolled avoids an extra dependency layer for this simple case).
  * Graceful shutdown clears all timers.
  */
 
-import * as pgDb from '../src/db/postgres.js';
-import * as mongoDb from '../src/db/mongo.js';
-import * as redisDb from '../src/db/redis.js';
-import * as esDb from '../src/db/elastic.js';
-import { retentionJob } from '../src/jobs/retention.js';
-import { ensurePartitionsJob } from '../src/jobs/pg-partitions.js';
-import { applyIlmJob } from '../src/jobs/ilm-apply.js';
+import { config } from '../src/config.js';
+import { AppContainer } from '../src/container.js';
+import { PartitionJob } from '../src/jobs/pg-partitions.js';
+import { IlmApplyJob } from '../src/jobs/ilm-apply.js';
+import { RetentionJob } from '../src/jobs/retention.js';
 import { logger } from '../src/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -64,57 +62,37 @@ function msUntilNextUtc(targetHour: number, targetMinute: number): number {
 async function main(): Promise<void> {
   logger.info('Jobs runner booting');
 
-  // Connect all data stores
-  await redisDb.connect();
-  await mongoDb.connect();
-  await esDb.ensureIlmPolicies();
-
-  const pgHealth = await pgDb.healthCheck();
-  if (!pgHealth.ok) {
-    logger.error({ pgHealth }, 'PostgreSQL health check failed at startup');
-    process.exit(1);
-  }
-
+  const container = new AppContainer(config);
+  await container.initialize();
   logger.info('All DBs ready — scheduling jobs');
 
   const timers: Array<ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>> = [];
 
   // -------------------------------------------------------------------------
-  // 1. Retention job — every hour
-  // -------------------------------------------------------------------------
-  const HOUR_MS = 60 * 60 * 1000;
-  const retentionRunner = safeRun('retentionJob', retentionJob);
-
-  // Run immediately on startup, then every hour
-  retentionRunner();
-  timers.push(setInterval(retentionRunner, HOUR_MS));
-  logger.info('retentionJob scheduled: every 1 hour');
-
-  // -------------------------------------------------------------------------
-  // 2. Ensure partitions job — daily at 00:00 UTC
+  // 1. Partition job — daily at 00:05 UTC ('5 0 * * *')
   // -------------------------------------------------------------------------
   const DAY_MS = 24 * 60 * 60 * 1000;
-  const partitionsRunner = safeRun('ensurePartitionsJob', ensurePartitionsJob);
+  const partitionsRunner = safeRun('PartitionJob', () => new PartitionJob(container.pg).run());
 
   // Run once immediately so partitions exist from the start
   partitionsRunner();
 
-  const msUntilMidnight = msUntilNextUtc(0, 0);
+  const msUntil0005 = msUntilNextUtc(0, 5);
   logger.info(
-    { nextRunMs: msUntilMidnight, nextRunAt: new Date(Date.now() + msUntilMidnight).toISOString() },
-    'ensurePartitionsJob scheduled: daily at 00:00 UTC',
+    { nextRunMs: msUntil0005, nextRunAt: new Date(Date.now() + msUntil0005).toISOString() },
+    'PartitionJob scheduled: daily at 00:05 UTC',
   );
   timers.push(
     setTimeout(() => {
       partitionsRunner();
       timers.push(setInterval(partitionsRunner, DAY_MS));
-    }, msUntilMidnight),
+    }, msUntil0005),
   );
 
   // -------------------------------------------------------------------------
-  // 3. ILM apply job — daily at 01:00 UTC
+  // 2. ILM apply job — daily at 01:00 UTC ('0 1 * * *')
   // -------------------------------------------------------------------------
-  const ilmRunner = safeRun('applyIlmJob', applyIlmJob);
+  const ilmRunner = safeRun('IlmApplyJob', () => new IlmApplyJob(container.pg, container.es).run());
 
   // Run once immediately to reconcile on startup
   ilmRunner();
@@ -122,13 +100,33 @@ async function main(): Promise<void> {
   const msUntil1am = msUntilNextUtc(1, 0);
   logger.info(
     { nextRunMs: msUntil1am, nextRunAt: new Date(Date.now() + msUntil1am).toISOString() },
-    'applyIlmJob scheduled: daily at 01:00 UTC',
+    'IlmApplyJob scheduled: daily at 01:00 UTC',
   );
   timers.push(
     setTimeout(() => {
       ilmRunner();
       timers.push(setInterval(ilmRunner, DAY_MS));
     }, msUntil1am),
+  );
+
+  // -------------------------------------------------------------------------
+  // 3. Retention job — daily at 02:00 UTC ('0 2 * * *')
+  // -------------------------------------------------------------------------
+  const retentionRunner = safeRun('RetentionJob', () => new RetentionJob(container.retention).run());
+
+  // Run once immediately on startup
+  retentionRunner();
+
+  const msUntil2am = msUntilNextUtc(2, 0);
+  logger.info(
+    { nextRunMs: msUntil2am, nextRunAt: new Date(Date.now() + msUntil2am).toISOString() },
+    'RetentionJob scheduled: daily at 02:00 UTC',
+  );
+  timers.push(
+    setTimeout(() => {
+      retentionRunner();
+      timers.push(setInterval(retentionRunner, DAY_MS));
+    }, msUntil2am),
   );
 
   // -------------------------------------------------------------------------
@@ -140,10 +138,7 @@ async function main(): Promise<void> {
       clearInterval(timer as ReturnType<typeof setInterval>);
       clearTimeout(timer as ReturnType<typeof setTimeout>);
     }
-    await redisDb.close();
-    await mongoDb.close();
-    await esDb.close();
-    await pgDb.close();
+    await container.close();
     logger.info('Jobs runner shutdown complete');
     process.exit(0);
   };

@@ -7,10 +7,7 @@ import { config } from '../src/config.js';
 import { logger } from '../src/logger.js';
 import { fastifyErrorHandler } from '../src/errors.js';
 import { correlationPlugin } from '../src/lib/correlation.js';
-import { connect as connectMongo, close as closeMongo } from '../src/db/mongo.js';
-import { pool, close as closePg } from '../src/db/postgres.js';
-import { redis, connect as connectRedis, ensureConsumerGroup } from '../src/db/redis.js';
-import { esClient, ensureIlmPolicies, ensureIndexTemplate, ensurePercolatorIndex } from '../src/db/elastic.js';
+import { AppContainer } from '../src/container.js';
 
 // Route plugins
 import { ingestRoutes } from '../src/routes/ingest.js';
@@ -29,7 +26,7 @@ import { consistencyRoutes } from '../src/routes/consistency.js';
 // Build
 // ---------------------------------------------------------------------------
 
-async function build(): Promise<ReturnType<typeof Fastify>> {
+async function build(container: AppContainer): Promise<ReturnType<typeof Fastify>> {
   const fastify = Fastify({
     logger: false, // We use our own pino instance
     trustProxy: true,
@@ -98,42 +95,21 @@ async function build(): Promise<ReturnType<typeof Fastify>> {
   // aren't shadowed by the v1 prefix block below
   // -------------------------------------------------------------------------
 
-  await fastify.register(healthRoutes);
+  await fastify.register(healthRoutes(container));
 
   // Metrics at root — internal, no auth, firewalled at infra level
-  await fastify.register(metricsRoutes);
-
-  // -------------------------------------------------------------------------
-  // All v1 routes under /v1 prefix
-  // -------------------------------------------------------------------------
+  await fastify.register(metricsRoutes(container));
 
   await fastify.register(async (v1) => {
-    // Auth
-    await v1.register(authRoutes);
-
-    // Tenants
-    await v1.register(tenantRoutes);
-
-    // Projects (nested under tenants)
-    await v1.register(projectRoutes);
-
-    // Alerts (nested under projects)
-    await v1.register(alertRoutes);
-
-    // Search
-    await v1.register(searchRoutes);
-
-    // Reports (tenant-scoped + admin)
-    await v1.register(reportRoutes);
-
-    // Leaderboard
-    await v1.register(leaderboardRoutes);
-
-    // Ingest hot path
-    await v1.register(ingestRoutes);
-
-    // Admin: consistency audit
-    await v1.register(consistencyRoutes);
+    await v1.register(authRoutes(container));
+    await v1.register(tenantRoutes(container));
+    await v1.register(projectRoutes(container));
+    await v1.register(alertRoutes(container));
+    await v1.register(searchRoutes(container));
+    await v1.register(reportRoutes(container));
+    await v1.register(leaderboardRoutes(container));
+    await v1.register(ingestRoutes(container));
+    await v1.register(consistencyRoutes(container));
   }, { prefix: '/v1' });
 
   return fastify;
@@ -144,33 +120,13 @@ async function build(): Promise<ReturnType<typeof Fastify>> {
 // ---------------------------------------------------------------------------
 
 async function start(): Promise<void> {
-  const fastify = await build();
+  const container = new AppContainer(config);
 
-  // -----------------------------------------------------------------------
-  // Startup: connect to all datastores
-  // -----------------------------------------------------------------------
+  logger.info('Initializing AppContainer…');
+  await container.initialize();
+  logger.info('AppContainer ready');
 
-  logger.info('Connecting to MongoDB…');
-  await connectMongo();
-
-  logger.info('Connecting to Redis…');
-  await connectRedis();
-
-  logger.info('Ensuring Redis consumer group…');
-  await ensureConsumerGroup();
-
-  logger.info('Ensuring Elasticsearch ILM policies…');
-  await ensureIlmPolicies();
-
-  logger.info('Ensuring Elasticsearch index template…');
-  await ensureIndexTemplate();
-
-  logger.info('Ensuring Elasticsearch percolator index…');
-  await ensurePercolatorIndex();
-
-  // Touch PG pool to verify connectivity before serving traffic
-  await pool.query('SELECT 1');
-  logger.info('PostgreSQL pool ready');
+  const fastify = await build(container);
 
   // -----------------------------------------------------------------------
   // Graceful shutdown
@@ -186,12 +142,7 @@ async function start(): Promise<void> {
       logger.error({ err }, 'Error closing Fastify');
     }
 
-    await Promise.allSettled([
-      closePg().catch((err) => logger.error({ err }, 'Error closing PG pool')),
-      closeMongo().catch((err) => logger.error({ err }, 'Error closing MongoDB')),
-      esClient.close().catch((err) => logger.error({ err }, 'Error closing Elasticsearch')),
-      redis.quit().catch((err) => logger.error({ err }, 'Error closing Redis')),
-    ]);
+    await container.close();
 
     logger.info('All connections closed. Exiting.');
     process.exit(0);

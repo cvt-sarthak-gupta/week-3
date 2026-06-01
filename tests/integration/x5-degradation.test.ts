@@ -155,8 +155,7 @@ describe('X5-B: Real Degradation (Docker stop/start)', () => {
 
   it.skipIf(SKIP)('scenario 1: ES down — rate-limit and cache still work; search falls back gracefully', async () => {
     // Imports are dynamic so they pick up the test Redis connection
-    const { getOrFill } = await import('../../src/lib/cache.js')
-    const { checkRateLimit } = await import('../../src/lib/rate-limit.js')
+    const { getOrFill } = await import('../helpers/setup.js')
 
     const r = new Redis(REDIS_OPTS)
     try {
@@ -178,9 +177,9 @@ describe('X5-B: Real Degradation (Docker stop/start)', () => {
       expect(fetchCount).toBe(1)
 
       // Attempting to use ES client should fail/throw
-      const { esClient } = await import('../../src/db/elastic.js')
+      const { getEsClient } = await import('../helpers/setup.js')
       await expect(
-        esClient.cluster.health({ timeout: '2s' }),
+        getEsClient().cluster.health({ timeout: '2s' }),
       ).rejects.toThrow()
 
       console.log('✓ ES down: Redis cache still works, ES client throws as expected')
@@ -204,9 +203,9 @@ describe('X5-B: Real Degradation (Docker stop/start)', () => {
       expect(val).toBe('alive')
 
       // Mongo operations must throw
-      const { eventsCollection } = await import('../../src/db/mongo.js')
+      const { getMongoDb } = await import('../helpers/setup.js')
       await expect(
-        eventsCollection().findOne({ _id: 'no-such-doc' }, { maxTimeMS: 2000 } as any),
+        getMongoDb().collection('events').findOne({} as any, { maxTimeMS: 2000 } as any),
       ).rejects.toThrow()
 
       console.log('✓ Mongo down: Redis operational, Mongo throws as expected')
@@ -279,9 +278,9 @@ describe('X5-B: Real Degradation (Docker stop/start)', () => {
       expect(JSON.parse(cached!)).toMatchObject({ id: 'proj-x5' })
 
       // PG is down — new PG queries must fail
-      const { pool } = await import('../../src/db/postgres.js')
+      const { getPgPool } = await import('../helpers/setup.js')
       await expect(
-        pool.query('SELECT 1', []),
+        getPgPool().query('SELECT 1', []),
       ).rejects.toThrow()
 
       console.log('✓ PG down: cached API key served from Redis, PG queries throw')

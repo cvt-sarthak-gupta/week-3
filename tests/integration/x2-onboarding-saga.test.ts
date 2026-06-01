@@ -12,8 +12,8 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { onboardTenant } from '../../src/domain/tenants.js'
 import {
+  onboardTenant,
   setupTestDatabases,
   teardownTestDatabases,
   getPgPool,

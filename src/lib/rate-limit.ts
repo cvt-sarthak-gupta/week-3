@@ -1,7 +1,7 @@
-import { loadLua } from '../db/redis.js';
 import { nanoid } from 'nanoid';
 import { logger } from '../logger.js';
-import type pg from 'pg';
+import type { RedisDatabase } from '../db/redis.js';
+import type { PostgresDatabase } from '../db/postgres.js';
 
 export interface RateLimitResult {
   allowed: boolean;
@@ -14,73 +14,85 @@ export interface RateLimitConfig {
   maxRequests: number;
 }
 
-let _script: Awaited<ReturnType<typeof loadLua>> | null = null;
-
-async function getScript(): Promise<Awaited<ReturnType<typeof loadLua>>> {
-  if (!_script) {
-    _script = await loadLua('sliding-window');
-  }
-  return _script;
-}
-
-export async function checkRateLimit(
-  apiKey: string,
-  config: RateLimitConfig,
-): Promise<RateLimitResult> {
-  const script = await getScript();
-  const key = `rl:apikey:${apiKey}`;
-  const now = Date.now();
-  const reqId = nanoid(8);
-
-  const result = (await script.evalsha(
-    [key],
-    [config.windowMs, config.maxRequests, now, reqId],
-  )) as [number, number, number];
-
-  logger.debug(
-    { apiKey, allowed: result[0] === 1, remaining: result[1] },
-    'rate limit check',
-  );
-
-  return {
-    allowed: result[0] === 1,
-    remaining: result[1],
-    resetAt: result[2],
-  };
-}
-
-// Cache of plan limits: planId → { windowMs, maxRequests }
-const planLimitCache = new Map<
-  string,
-  { config: RateLimitConfig; cachedAt: number }
->();
 const PLAN_CACHE_TTL = 60_000;
 
-export async function getPlanRateLimit(
-  planId: string,
-  pgPool: pg.Pool,
-): Promise<RateLimitConfig> {
-  const cached = planLimitCache.get(planId);
-  if (cached !== undefined && Date.now() - cached.cachedAt < PLAN_CACHE_TTL) {
-    return cached.config;
+export class RateLimitService {
+  private readonly redis: RedisDatabase;
+  private readonly pg: PostgresDatabase;
+
+  private _script: Awaited<ReturnType<RedisDatabase['loadLua']>> | null = null;
+
+  private readonly planLimitCache = new Map<
+    string,
+    { config: RateLimitConfig; cachedAt: number }
+  >();
+
+  constructor(redis: RedisDatabase, pg: PostgresDatabase) {
+    this.redis = redis;
+    this.pg = pg;
   }
 
-  const result = await pgPool.query<{ event_quota_per_month: number }>(
-    'SELECT event_quota_per_month FROM plans WHERE id = $1',
-    [planId],
-  );
-
-  if (result.rows[0] === undefined) {
-    // Fallback: 1000/minute
-    return { windowMs: 60_000, maxRequests: 1000 };
+  private async getScript(): Promise<Awaited<ReturnType<RedisDatabase['loadLua']>>> {
+    if (!this._script) {
+      this._script = await this.redis.loadLua('sliding-window');
+    }
+    return this._script;
   }
 
-  // Convert monthly quota to per-minute limit (assuming ~43200 minutes/month)
-  const perMinute = Math.max(
-    10,
-    Math.ceil(result.rows[0].event_quota_per_month / 43200),
-  );
-  const config: RateLimitConfig = { windowMs: 60_000, maxRequests: perMinute };
-  planLimitCache.set(planId, { config, cachedAt: Date.now() });
-  return config;
+  async checkRateLimit(
+    apiKey: string,
+    config: RateLimitConfig,
+  ): Promise<RateLimitResult> {
+    const script = await this.getScript();
+    const key = `rl:apikey:${apiKey}`;
+    const now = Date.now();
+    const reqId = nanoid(8);
+
+    const result = (await this.redis.client.evalsha(
+      script.sha,
+      1,
+      key,
+      String(config.windowMs),
+      String(config.maxRequests),
+      String(now),
+      reqId,
+    )) as [number, number, number];
+
+    logger.debug(
+      { apiKey, allowed: result[0] === 1, remaining: result[1] },
+      'rate limit check',
+    );
+
+    return {
+      allowed: result[0] === 1,
+      remaining: result[1],
+      resetAt: result[2],
+    };
+  }
+
+  async getPlanRateLimit(planId: string): Promise<RateLimitConfig> {
+    const cached = this.planLimitCache.get(planId);
+    if (cached !== undefined && Date.now() - cached.cachedAt < PLAN_CACHE_TTL) {
+      return cached.config;
+    }
+
+    const result = await this.pg.query<{ event_quota_per_month: number }>(
+      'SELECT event_quota_per_month FROM plans WHERE id = $1',
+      [planId],
+    );
+
+    if (result.rows[0] === undefined) {
+      // Fallback: 1000/minute
+      return { windowMs: 60_000, maxRequests: 1000 };
+    }
+
+    // Convert monthly quota to per-minute limit (assuming ~43200 minutes/month)
+    const perMinute = Math.max(
+      10,
+      Math.ceil(result.rows[0].event_quota_per_month / 43200),
+    );
+    const config: RateLimitConfig = { windowMs: 60_000, maxRequests: perMinute };
+    this.planLimitCache.set(planId, { config, cachedAt: Date.now() });
+    return config;
+  }
 }

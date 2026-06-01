@@ -1,9 +1,8 @@
 import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
-import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
-import { pool } from '../db/postgres.js';
-import { signTokens } from '../lib/auth.js';
+import { AppContainer } from '../container.js';
 import { AuthError, ConflictError, ValidationError } from '../errors.js';
 
 const scryptAsync = promisify(scrypt);
@@ -48,165 +47,162 @@ interface RefreshBody {
   refreshToken: string;
 }
 
-const authPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance) => {
-  fastify.post(
-    '/auth/register',
-    {
-      schema: {
-        tags: ['auth'],
-        body: {
-          type: 'object',
-          required: ['email', 'password', 'fullName'],
-          properties: {
-            email: { type: 'string', format: 'email' },
-            password: { type: 'string', minLength: 8 },
-            fullName: { type: 'string', minLength: 1 },
+export function authRoutes(container: AppContainer): FastifyPluginAsync {
+  return fp(async (fastify) => {
+    fastify.post(
+      '/auth/register',
+      {
+        schema: {
+          tags: ['auth'],
+          body: {
+            type: 'object',
+            required: ['email', 'password', 'fullName'],
+            properties: {
+              email: { type: 'string', format: 'email' },
+              password: { type: 'string', minLength: 8 },
+              fullName: { type: 'string', minLength: 1 },
+            },
           },
         },
       },
-    },
-    async (request: FastifyRequest<{ Body: RegisterBody }>, reply: FastifyReply): Promise<void> => {
-      const { email, password, fullName } = request.body;
+      async (request: FastifyRequest<{ Body: RegisterBody }>, reply: FastifyReply): Promise<void> => {
+        const { email, password, fullName } = request.body;
 
-      const existing = await pool.query<{ id: string }>(
-        'SELECT id FROM users WHERE email = $1 LIMIT 1',
-        [email],
-      );
-      if ((existing.rowCount ?? 0) > 0) {
-        throw new ConflictError('Email already registered');
-      }
+        const existing = await container.pg.query<{ id: string }>(
+          'SELECT id FROM users WHERE email = $1 LIMIT 1',
+          [email],
+        );
+        if ((existing.rowCount ?? 0) > 0) {
+          throw new ConflictError('Email already registered');
+        }
 
-      if (password.length < 8) {
-        throw new ValidationError('Password must be at least 8 characters');
-      }
+        if (password.length < 8) {
+          throw new ValidationError('Password must be at least 8 characters');
+        }
 
-      const passwordHash = await hashPassword(password);
+        const passwordHash = await hashPassword(password);
 
-      const result = await pool.query<{ id: string }>(
-        `INSERT INTO users (email, password_hash, full_name)
-         VALUES ($1, $2, $3)
-         RETURNING id`,
-        [email, passwordHash, fullName],
-      );
+        const result = await container.pg.query<{ id: string }>(
+          `INSERT INTO users (email, password_hash, full_name)
+           VALUES ($1, $2, $3)
+           RETURNING id`,
+          [email, passwordHash, fullName],
+        );
 
-      const userId = result.rows[0]?.id;
-      if (userId === undefined) {
-        throw new Error('Failed to create user');
-      }
+        const userId = result.rows[0]?.id;
+        if (userId === undefined) {
+          throw new Error('Failed to create user');
+        }
 
-      void reply.status(201).send({ userId, email });
-    },
-  );
+        void reply.status(201).send({ userId, email });
+      },
+    );
 
-  fastify.post(
-    '/auth/login',
-    {
-      schema: {
-        tags: ['auth'],
-        body: {
-          type: 'object',
-          required: ['email', 'password'],
-          properties: {
-            email: { type: 'string', format: 'email' },
-            password: { type: 'string', minLength: 1 },
+    fastify.post(
+      '/auth/login',
+      {
+        schema: {
+          tags: ['auth'],
+          body: {
+            type: 'object',
+            required: ['email', 'password'],
+            properties: {
+              email: { type: 'string', format: 'email' },
+              password: { type: 'string', minLength: 1 },
+            },
           },
         },
       },
-    },
-    async (request: FastifyRequest<{ Body: LoginBody }>, reply: FastifyReply): Promise<void> => {
-      const { email, password } = request.body;
+      async (request: FastifyRequest<{ Body: LoginBody }>, reply: FastifyReply): Promise<void> => {
+        const { email, password } = request.body;
 
-      const result = await pool.query<UserRow>(
-        `SELECT u.id, u.email, u.full_name, u.password_hash,
-                tm.tenant_id, tm.role
-         FROM users u
-         LEFT JOIN tenant_members tm ON tm.user_id = u.id
-         WHERE u.email = $1
-         LIMIT 1`,
-        [email],
-      );
+        const result = await container.pg.query<UserRow>(
+          `SELECT u.id, u.email, u.full_name, u.password_hash,
+                  tm.tenant_id, tm.role
+           FROM users u
+           LEFT JOIN tenant_members tm ON tm.user_id = u.id
+           WHERE u.email = $1
+           LIMIT 1`,
+          [email],
+        );
 
-      const user = result.rows[0];
-      if (user === undefined) {
-        throw new AuthError('Invalid email or password');
-      }
+        const user = result.rows[0];
+        if (user === undefined) {
+          throw new AuthError('Invalid email or password');
+        }
 
-      const valid = await verifyPassword(password, user.password_hash);
-      if (!valid) {
-        throw new AuthError('Invalid email or password');
-      }
+        const valid = await verifyPassword(password, user.password_hash);
+        if (!valid) {
+          throw new AuthError('Invalid email or password');
+        }
 
-      await pool.query(
-        'UPDATE users SET last_login_at = NOW() WHERE id = $1',
-        [user.id],
-      );
+        await container.pg.query(
+          'UPDATE users SET last_login_at = NOW() WHERE id = $1',
+          [user.id],
+        );
 
-      const payload = {
-        userId: user.id,
-        tenantId: user.tenant_id ?? '',
-        email: user.email,
-        role: user.role,
-      };
-
-      const { accessToken, refreshToken } = await signTokens(payload, fastify);
-
-      void reply.status(200).send({
-        accessToken,
-        refreshToken,
-        user: {
-          id: user.id,
+        const payload = {
+          userId: user.id,
+          tenantId: user.tenant_id ?? '',
           email: user.email,
-          fullName: user.full_name,
-        },
-      });
-    },
-  );
+          role: user.role,
+        };
 
-  fastify.post(
-    '/auth/refresh',
-    {
-      schema: {
-        tags: ['auth'],
-        body: {
-          type: 'object',
-          required: ['refreshToken'],
-          properties: {
-            refreshToken: { type: 'string', minLength: 1 },
+        const { accessToken, refreshToken } = await container.auth.signTokens(payload, fastify);
+
+        void reply.status(200).send({
+          accessToken,
+          refreshToken,
+          user: {
+            id: user.id,
+            email: user.email,
+            fullName: user.full_name,
+          },
+        });
+      },
+    );
+
+    fastify.post(
+      '/auth/refresh',
+      {
+        schema: {
+          tags: ['auth'],
+          body: {
+            type: 'object',
+            required: ['refreshToken'],
+            properties: {
+              refreshToken: { type: 'string', minLength: 1 },
+            },
           },
         },
       },
-    },
-    async (request: FastifyRequest<{ Body: RefreshBody }>, reply: FastifyReply): Promise<void> => {
-      const { refreshToken } = request.body;
+      async (request: FastifyRequest<{ Body: RefreshBody }>, reply: FastifyReply): Promise<void> => {
+        const { refreshToken } = request.body;
 
-      let payload;
-      try {
-        payload = await fastify.jwt.verify<{
-          userId: string;
-          tenantId: string;
-          email: string;
-          role: string;
-        }>(refreshToken);
-      } catch {
-        throw new AuthError('Invalid or expired refresh token');
-      }
+        let payload;
+        try {
+          payload = await fastify.jwt.verify<{
+            userId: string;
+            tenantId: string;
+            email: string;
+            role: string;
+          }>(refreshToken);
+        } catch {
+          throw new AuthError('Invalid or expired refresh token');
+        }
 
-      const accessToken = await fastify.jwt.sign(
-        {
-          userId: payload.userId,
-          tenantId: payload.tenantId,
-          email: payload.email,
-          role: payload.role,
-        },
-        // config.jwt.expiry is accessed via the registered plugin at startup
-      );
+        const accessToken = await fastify.jwt.sign(
+          {
+            userId: payload.userId,
+            tenantId: payload.tenantId,
+            email: payload.email,
+            role: payload.role,
+          },
+          // config.jwt.expiry is accessed via the registered plugin at startup
+        );
 
-      void reply.status(200).send({ accessToken });
-    },
-  );
-};
-
-export const authRoutes = fp(authPluginHandler, {
-  name: 'auth-routes',
-  fastify: '4.x',
-});
+        void reply.status(200).send({ accessToken });
+      },
+    );
+  }, { name: 'auth-routes', fastify: '4.x' });
+}

@@ -13,8 +13,8 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { runAudit } from '../../src/domain/consistency.js'
 import {
+  runAudit,
   setupTestDatabases,
   teardownTestDatabases,
   createTestTenant,

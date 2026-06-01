@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { pool, withClient } from '../db/postgres.js';
-import { projectConfigsCollection } from '../db/mongo.js';
-import { applyPolicyForProject } from '../db/elastic.js';
-import { redis } from '../db/redis.js';
+import type { PostgresDatabase } from '../db/postgres.js';
+import type { MongoDatabase } from '../db/mongo.js';
+import type { ElasticsearchDatabase } from '../db/elastic.js';
+import type { RedisDatabase } from '../db/redis.js';
 import { logger } from '../logger.js';
 
 export interface OnboardTenantInput {
@@ -37,167 +37,6 @@ export interface TenantQuotaReport {
   percentUsed: number;
 }
 
-async function deletePgRows(tenantId: string, projectId: string): Promise<void> {
-  try {
-    await withClient(async (client) => {
-      await client.query(`DELETE FROM tenant_members WHERE tenant_id = $1`, [tenantId]);
-      await client.query(`DELETE FROM monthly_usage WHERE tenant_id = $1`, [tenantId]);
-      await client.query(`DELETE FROM projects WHERE id = $1`, [projectId]);
-      await client.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]);
-    });
-  } catch (compensationErr) {
-    logger.error(
-      { err: compensationErr, tenantId, projectId },
-      'onboardTenant: compensation delete of PG rows failed — manual cleanup required',
-    );
-  }
-}
-
-export async function onboardTenant(input: OnboardTenantInput): Promise<OnboardTenantResult> {
-  const { tenantName, tenantSlug, planId, userId, projectName, projectSlug } = input;
-
-  let tenantId!: string;
-  let projectId!: string;
-  let apiKey!: string;
-
-  await withClient(async (client) => {
-    // INSERT tenant
-    const tenantRes = await client.query<{ id: string }>(
-      `INSERT INTO tenants (id, name, slug, plan_id, is_active, created_at)
-       VALUES ($1, $2, $3, $4, true, NOW())
-       RETURNING id`,
-      [randomUUID(), tenantName, tenantSlug, planId],
-    );
-    const tenantRow = tenantRes.rows[0];
-    if (tenantRow === undefined) throw new Error('Failed to insert tenant');
-    tenantId = tenantRow.id;
-
-    // INSERT project (api_key is a generated UUID)
-    const projectRes = await client.query<{ id: string; api_key: string }>(
-      `INSERT INTO projects (id, tenant_id, name, slug, api_key, is_archived, created_at)
-       VALUES ($1, $2, $3, $4, $5, false, NOW())
-       RETURNING id, api_key::text AS api_key`,
-      [randomUUID(), tenantId, projectName, projectSlug, randomUUID()],
-    );
-    const projectRow = projectRes.rows[0];
-    if (projectRow === undefined) throw new Error('Failed to insert project');
-    projectId = projectRow.id;
-    apiKey = projectRow.api_key;
-
-    // INSERT tenant_member (owner)
-    await client.query(
-      `INSERT INTO tenant_members (tenant_id, user_id, role)
-       VALUES ($1, $2, 'owner')`,
-      [tenantId, userId],
-    );
-
-    // INSERT monthly_usage for current month
-    const now = new Date();
-    await client.query(
-      `INSERT INTO monthly_usage (tenant_id, year, month, event_count)
-       VALUES ($1, $2, $3, 0)
-       ON CONFLICT (tenant_id, year, month) DO NOTHING`,
-      [tenantId, now.getUTCFullYear(), now.getUTCMonth() + 1],
-    );
-  });
-
-  try {
-    await projectConfigsCollection().insertOne({
-      _id: projectId,
-      tenantId,
-      name: projectName,
-      retentionDays: 90,
-      alertsEnabled: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      settings: {
-        samplingRate: 1.0,
-        ignoredErrors: [] as string[],
-        retentionDays: 90,
-      },
-    });
-  } catch (mongoErr) {
-    logger.error({ err: mongoErr, tenantId, projectId }, 'onboardTenant: Mongo insert failed, compensating PG');
-    await deletePgRows(tenantId, projectId);
-    throw mongoErr;
-  }
-
-  try {
-    await applyPolicyForProject(projectId, 90);
-  } catch (esErr) {
-    logger.error({ err: esErr, tenantId, projectId }, 'onboardTenant: ES index creation failed, compensating Mongo + PG');
-    try {
-      await projectConfigsCollection().deleteOne({ _id: projectId });
-    } catch (mongoCompErr) {
-      logger.error(
-        { err: mongoCompErr, projectId },
-        'onboardTenant: compensation delete of Mongo config failed — manual cleanup required',
-      );
-    }
-    await deletePgRows(tenantId, projectId);
-    throw esErr;
-  }
-
-  try {
-    await redis.set(`ratelimit:init:${projectId}`, '1', 'EX', 3600);
-  } catch (redisErr) {
-    logger.warn(
-      { err: redisErr, projectId },
-      'onboardTenant: Redis rate-limit init failed (non-fatal, key is recreatable)',
-    );
-  }
-
-  logger.info({ tenantId, projectId }, 'Tenant onboarded successfully');
-  return { tenantId, projectId, apiKey };
-}
-
-export async function getTenantQuota(tenantId: string): Promise<TenantQuotaReport> {
-  const result = await pool.query<{
-    tenant_id: string;
-    plan_name: string | null;
-    event_quota_per_month: number | null;
-    events_this_month: number;
-  }>(
-    `SELECT
-       t.id                                     AS tenant_id,
-       p.name                                   AS plan_name,
-       p.event_quota_per_month,
-       COALESCE(mu.event_count, 0)::int         AS events_this_month
-     FROM tenants t
-     LEFT JOIN plans p        ON p.id = t.plan_id
-     LEFT JOIN monthly_usage mu
-            ON mu.tenant_id = t.id
-           AND mu.year = EXTRACT(YEAR FROM NOW())
-           AND mu.month = EXTRACT(MONTH FROM NOW())
-     WHERE t.id = $1
-     LIMIT 1`,
-    [tenantId],
-  );
-
-  const row = result.rows[0];
-  if (row === undefined) {
-    return {
-      tenantId,
-      planName: null,
-      eventQuotaPerMonth: null,
-      eventsThisMonth: 0,
-      percentUsed: 0,
-    };
-  }
-
-  const quota = row.event_quota_per_month;
-  const used = row.events_this_month;
-  const percent = quota !== null && quota > 0 ? Math.round((used / quota) * 100) : 0;
-
-  return {
-    tenantId: row.tenant_id,
-    planName: row.plan_name,
-    eventQuotaPerMonth: quota,
-    eventsThisMonth: used,
-    percentUsed: percent,
-  };
-}
-
 export interface TenantQuotaReportRow {
   tenantId: string;
   tenantName: string;
@@ -207,41 +46,288 @@ export interface TenantQuotaReportRow {
   percentUsed: number;
 }
 
-export async function getTenantQuotaReport(): Promise<TenantQuotaReportRow[]> {
-  const result = await pool.query<{
-    tenant_id: string;
-    tenant_name: string;
-    plan_name: string | null;
-    event_quota_per_month: number | null;
-    events_this_month: number;
-  }>(
-    `SELECT
-       t.id                                     AS tenant_id,
-       t.name                                   AS tenant_name,
-       p.name                                   AS plan_name,
-       p.event_quota_per_month,
-       COALESCE(mu.event_count, 0)::int         AS events_this_month
-     FROM tenants t
-     LEFT JOIN plans p        ON p.id = t.plan_id
-     LEFT JOIN monthly_usage mu
-            ON mu.tenant_id = t.id
-           AND mu.year = EXTRACT(YEAR FROM NOW())
-           AND mu.month = EXTRACT(MONTH FROM NOW())
-     ORDER BY events_this_month DESC`,
-  );
+export class TenantService {
+  constructor(
+    private readonly pg: PostgresDatabase,
+    private readonly mongo: MongoDatabase,
+    private readonly es: ElasticsearchDatabase,
+    private readonly redis: RedisDatabase,
+  ) {}
 
-  return result.rows.map((row) => {
+  private async deletePgRows(tenantId: string, projectId: string): Promise<void> {
+    try {
+      const client = await this.pg.connect();
+      try {
+        await client.query(`DELETE FROM tenant_members WHERE tenant_id = $1`, [tenantId]);
+        await client.query(`DELETE FROM monthly_usage WHERE tenant_id = $1`, [tenantId]);
+        await client.query(`DELETE FROM projects WHERE id = $1`, [projectId]);
+        await client.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]);
+      } finally {
+        client.release();
+      }
+    } catch (compensationErr) {
+      logger.error(
+        { err: compensationErr, tenantId, projectId },
+        'onboardTenant: compensation delete of PG rows failed — manual cleanup required',
+      );
+    }
+  }
+
+  async onboardTenant(input: OnboardTenantInput): Promise<OnboardTenantResult> {
+    const { tenantName, tenantSlug, planId, userId, projectName, projectSlug } = input;
+
+    let tenantId!: string;
+    let projectId!: string;
+    let apiKey!: string;
+
+    // New tenant creation has no prior tenant context — bypass RLS with a raw
+    // transaction. withTenant requires an existing tenantId for SET LOCAL.
+    const pgClient = await this.pg.connect();
+    try {
+      await pgClient.query('BEGIN');
+
+      const tenantRes = await pgClient.query<{ id: string }>(
+        `INSERT INTO tenants (id, name, slug, plan_id, is_active, created_at)
+         VALUES ($1, $2, $3, $4, true, NOW())
+         RETURNING id`,
+        [randomUUID(), tenantName, tenantSlug, planId],
+      );
+      const tenantRow = tenantRes.rows[0];
+      if (tenantRow === undefined) throw new Error('Failed to insert tenant');
+      tenantId = tenantRow.id;
+
+      const projectRes = await pgClient.query<{ id: string; api_key: string }>(
+        `INSERT INTO projects (id, tenant_id, name, slug, api_key, is_archived, created_at)
+         VALUES ($1, $2, $3, $4, $5, false, NOW())
+         RETURNING id, api_key::text AS api_key`,
+        [randomUUID(), tenantId, projectName, projectSlug, randomUUID()],
+      );
+      const projectRow = projectRes.rows[0];
+      if (projectRow === undefined) throw new Error('Failed to insert project');
+      projectId = projectRow.id;
+      apiKey = projectRow.api_key;
+
+      await pgClient.query(
+        `INSERT INTO tenant_members (tenant_id, user_id, role) VALUES ($1, $2, 'owner')`,
+        [tenantId, userId],
+      );
+
+      const now = new Date();
+      await pgClient.query(
+        `INSERT INTO monthly_usage (tenant_id, year, month, event_count)
+         VALUES ($1, $2, $3, 0)
+         ON CONFLICT (tenant_id, year, month) DO NOTHING`,
+        [tenantId, now.getUTCFullYear(), now.getUTCMonth() + 1],
+      );
+
+      await pgClient.query('COMMIT');
+    } catch (err) {
+      await pgClient.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      pgClient.release();
+    }
+
+    try {
+      await this.mongo.projectConfigs().insertOne({
+        _id: projectId,
+        tenantId,
+        name: projectName,
+        retentionDays: 90,
+        alertsEnabled: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        settings: {
+          samplingRate: 1.0,
+          ignoredErrors: [] as string[],
+          retentionDays: 90,
+        },
+      });
+    } catch (mongoErr) {
+      logger.error({ err: mongoErr, tenantId, projectId }, 'onboardTenant: Mongo insert failed, compensating PG');
+      await this.deletePgRows(tenantId, projectId);
+      throw mongoErr;
+    }
+
+    try {
+      await this.es.applyPolicyForProject(projectId, 90);
+    } catch (esErr) {
+      logger.error({ err: esErr, tenantId, projectId }, 'onboardTenant: ES index creation failed, compensating Mongo + PG');
+      try {
+        await this.mongo.projectConfigs().deleteOne({ _id: projectId });
+      } catch (mongoCompErr) {
+        logger.error(
+          { err: mongoCompErr, projectId },
+          'onboardTenant: compensation delete of Mongo config failed — manual cleanup required',
+        );
+      }
+      await this.deletePgRows(tenantId, projectId);
+      throw esErr;
+    }
+
+    try {
+      await this.redis.client.set(`ratelimit:init:${projectId}`, '1', 'EX', 3600);
+    } catch (redisErr) {
+      logger.warn(
+        { err: redisErr, projectId },
+        'onboardTenant: Redis rate-limit init failed (non-fatal, key is recreatable)',
+      );
+    }
+
+    logger.info({ tenantId, projectId }, 'Tenant onboarded successfully');
+    return { tenantId, projectId, apiKey };
+  }
+
+  async getTenantQuotaReport(tenantId: string): Promise<TenantQuotaReport> {
+    const result = await this.pg.query<{
+      tenant_id: string;
+      plan_name: string | null;
+      event_quota_per_month: number | null;
+      events_this_month: number;
+    }>(
+      `SELECT
+         t.id                                     AS tenant_id,
+         p.name                                   AS plan_name,
+         p.event_quota_per_month,
+         COALESCE(mu.event_count, 0)::int         AS events_this_month
+       FROM tenants t
+       LEFT JOIN plans p        ON p.id = t.plan_id
+       LEFT JOIN monthly_usage mu
+              ON mu.tenant_id = t.id
+             AND mu.year = EXTRACT(YEAR FROM NOW())
+             AND mu.month = EXTRACT(MONTH FROM NOW())
+       WHERE t.id = $1
+       LIMIT 1`,
+      [tenantId],
+    );
+
+    const row = result.rows[0];
+    if (row === undefined) {
+      return {
+        tenantId,
+        planName: null,
+        eventQuotaPerMonth: null,
+        eventsThisMonth: 0,
+        percentUsed: 0,
+      };
+    }
+
     const quota = row.event_quota_per_month;
     const used = row.events_this_month;
     const percent = quota !== null && quota > 0 ? Math.round((used / quota) * 100) : 0;
 
     return {
       tenantId: row.tenant_id,
-      tenantName: row.tenant_name,
       planName: row.plan_name,
       eventQuotaPerMonth: quota,
       eventsThisMonth: used,
       percentUsed: percent,
     };
-  });
+  }
+
+  async getAllTenantsQuotaReport(): Promise<TenantQuotaReportRow[]> {
+    const result = await this.pg.query<{
+      tenant_id: string;
+      tenant_name: string;
+      plan_name: string | null;
+      event_quota_per_month: number | null;
+      events_this_month: number;
+    }>(
+      `SELECT
+         t.id                                     AS tenant_id,
+         t.name                                   AS tenant_name,
+         p.name                                   AS plan_name,
+         p.event_quota_per_month,
+         COALESCE(mu.event_count, 0)::int         AS events_this_month
+       FROM tenants t
+       LEFT JOIN plans p        ON p.id = t.plan_id
+       LEFT JOIN monthly_usage mu
+              ON mu.tenant_id = t.id
+             AND mu.year = EXTRACT(YEAR FROM NOW())
+             AND mu.month = EXTRACT(MONTH FROM NOW())
+       ORDER BY events_this_month DESC`,
+    );
+
+    return result.rows.map((row) => {
+      const quota = row.event_quota_per_month;
+      const used = row.events_this_month;
+      const percent = quota !== null && quota > 0 ? Math.round((used / quota) * 100) : 0;
+
+      return {
+        tenantId: row.tenant_id,
+        tenantName: row.tenant_name,
+        planName: row.plan_name,
+        eventQuotaPerMonth: quota,
+        eventsThisMonth: used,
+        percentUsed: percent,
+      };
+    });
+  }
+
+  async getTenantById(tenantId: string): Promise<unknown> {
+    const result = await this.pg.query<TenantInfo>(
+      `SELECT id, name, slug, plan_id, is_active, created_at
+       FROM tenants
+       WHERE id = $1
+       LIMIT 1`,
+      [tenantId],
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  async updateTenant(tenantId: string, input: unknown): Promise<unknown> {
+    const updates = input as Record<string, unknown>;
+    const setClauses: string[] = [];
+    const values: unknown[] = [];
+    let paramIndex = 1;
+
+    const allowedFields: Record<string, string> = {
+      name: 'name',
+      slug: 'slug',
+      planId: 'plan_id',
+      isActive: 'is_active',
+    };
+
+    for (const [key, column] of Object.entries(allowedFields)) {
+      if (key in updates) {
+        setClauses.push(`${column} = $${paramIndex}`);
+        values.push(updates[key]);
+        paramIndex++;
+      }
+    }
+
+    if (setClauses.length === 0) {
+      return this.getTenantById(tenantId);
+    }
+
+    values.push(tenantId);
+
+    const result = await this.pg.query<TenantInfo>(
+      `UPDATE tenants
+       SET ${setClauses.join(', ')}
+       WHERE id = $${paramIndex}
+       RETURNING id, name, slug, plan_id, is_active, created_at`,
+      values,
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  async checkTenantMembership(tenantId: string, userId: string): Promise<{ role: string }> {
+    const result = await this.pg.query<{ role: string }>(
+      `SELECT role
+       FROM tenant_members
+       WHERE tenant_id = $1 AND user_id = $2
+       LIMIT 1`,
+      [tenantId, userId],
+    );
+
+    const row = result.rows[0];
+    if (row === undefined) {
+      throw new Error(`User ${userId} is not a member of tenant ${tenantId}`);
+    }
+
+    return { role: row.role };
+  }
 }

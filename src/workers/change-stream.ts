@@ -1,7 +1,7 @@
 import { nanoid } from 'nanoid';
-import { redis } from '../db/redis.js';
-import { eventsCollection } from '../db/mongo.js';
 import { createWorkerLogger } from '../logger.js';
+import type { MongoDatabase } from '../db/mongo.js';
+import type { RedisDatabase } from '../db/redis.js';
 
 const LEADER_KEY = 'change-stream:fatal:leader';
 const RESUME_HASH_KEY = 'change-stream:fatal:resume';
@@ -11,170 +11,193 @@ const LEADER_RENEW_MS = 10_000;
 
 const log = createWorkerLogger('change-stream');
 
-export async function runChangeStreamWorker(): Promise<void> {
-  const nodeId = process.env['HOSTNAME'] ?? nanoid(8);
-  log.info({ nodeId }, 'Change stream worker starting');
+export class ChangeStreamWorker {
+  private readonly mongo: MongoDatabase;
+  private readonly redis: RedisDatabase;
+  private readonly nodeId: string;
 
-  let running = true;
-  let changeStreamOpen: ReturnType<typeof eventsCollection.prototype.watch> | null = null;
-  let holdsLock = false;
+  private _running = false;
+  private _holdsLock = false;
+  private _renewalTimer: ReturnType<typeof setInterval> | null = null;
+  private _changeStream: Awaited<ReturnType<ReturnType<MongoDatabase['events']>['watch']>> | null = null;
 
-  // Graceful shutdown handler
-  process.once('SIGTERM', () => {
-    log.info('SIGTERM received — stopping change stream worker');
-    running = false;
-    if (changeStreamOpen !== null) {
-      changeStreamOpen.close().catch((err: unknown) => {
-        log.warn({ err }, 'Error closing change stream on SIGTERM');
-      });
-    }
-    if (holdsLock) {
-      redis.del(LEADER_KEY).catch((err: unknown) => {
-        log.warn({ err }, 'Error releasing leader lock on SIGTERM');
-      });
-    }
-  });
+  constructor(mongo: MongoDatabase, redis: RedisDatabase) {
+    this.mongo = mongo;
+    this.redis = redis;
+    this.nodeId = process.env['HOSTNAME'] ?? nanoid(8);
+  }
 
-  while (running) {
-    // Try to acquire the leader lock
-    const acquired = await redis
-      .set(LEADER_KEY, nodeId, 'PX', LEADER_TTL_MS, 'NX')
-      .catch((err: unknown) => {
-        log.warn({ err }, 'Redis SET NX failed during leader election');
-        return null;
-      });
+  async start(): Promise<void> {
+    this._running = true;
+    log.info({ nodeId: this.nodeId }, 'Change stream worker starting');
 
-    if (acquired === null || acquired !== 'OK') {
-      // Not the leader — poll until lock expires
-      log.debug({ nodeId }, 'Not leader, polling...');
-      await new Promise<void>((resolve) => setTimeout(resolve, LEADER_POLL_MS));
-      continue;
-    }
-
-    holdsLock = true;
-    log.info({ nodeId }, 'Acquired change stream leader lock');
-
-    // Start renewal timer
-    let renewalTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
-      if (!holdsLock) return;
-      redis
-        .set(LEADER_KEY, nodeId, 'PX', LEADER_TTL_MS, 'XX')
-        .then((result) => {
-          if (result === null) {
-            log.warn({ nodeId }, 'Lock renewal failed (key expired?) — will re-enter election');
-            holdsLock = false;
-          }
-        })
+    while (this._running) {
+      // Try to acquire the leader lock via SETNX (PX = milliseconds, NX = only set if not exists)
+      const acquired = await this.redis.client
+        .set(LEADER_KEY, this.nodeId, 'PX', LEADER_TTL_MS, 'NX')
         .catch((err: unknown) => {
-          log.warn({ err }, 'Lock renewal error');
-          holdsLock = false;
+          log.warn({ err }, 'Redis SET NX failed during leader election');
+          return null;
         });
-    }, LEADER_RENEW_MS);
 
-    try {
-      await watchFatalEvents(nodeId, () => holdsLock);
-    } catch (err) {
-      log.error({ err }, 'Change stream watch loop error');
-    } finally {
-      holdsLock = false;
-      changeStreamOpen = null;
-      if (renewalTimer !== null) {
-        clearInterval(renewalTimer);
-        renewalTimer = null;
-      }
-      // Release lock if we still hold it
-      await redis.del(LEADER_KEY).catch((err: unknown) => {
-        log.warn({ err }, 'Error releasing leader lock after watch loop exit');
-      });
-    }
-
-    // Brief pause before re-entering election loop
-    if (running) {
-      await new Promise<void>((resolve) => setTimeout(resolve, LEADER_POLL_MS));
-    }
-  }
-
-  log.info('Change stream worker stopped');
-}
-
-async function watchFatalEvents(
-  nodeId: string,
-  holdsLock: () => boolean,
-): Promise<void> {
-  // Read resume token from Redis
-  const resumeTokenStr = await redis.hget(RESUME_HASH_KEY, 'token').catch(() => null);
-  let resumeToken: Record<string, unknown> | undefined;
-  if (resumeTokenStr !== null && resumeTokenStr !== undefined) {
-    try {
-      resumeToken = JSON.parse(resumeTokenStr) as Record<string, unknown>;
-    } catch {
-      resumeToken = undefined;
-    }
-  }
-
-  log.info({ nodeId, hasResumeToken: resumeToken !== undefined }, 'Opening change stream');
-
-  const pipeline = [
-    {
-      $match: {
-        'fullDocument.severity': 'fatal',
-        operationType: 'insert',
-      },
-    },
-  ];
-
-  const changeStream = eventsCollection().watch(pipeline, {
-    fullDocument: 'updateLookup',
-    ...(resumeToken !== undefined ? { resumeAfter: resumeToken } : {}),
-  });
-
-  try {
-    for await (const event of changeStream) {
-      if (!holdsLock()) {
-        log.warn({ nodeId }, 'Lost leader lock mid-stream — closing change stream');
-        break;
+      if (acquired === null || acquired !== 'OK') {
+        // Not the leader — poll until lock expires
+        log.debug({ nodeId: this.nodeId }, 'Not leader, polling...');
+        await new Promise<void>((resolve) => setTimeout(resolve, LEADER_POLL_MS));
+        continue;
       }
 
-      // Only insert events with a fullDocument (insert operations)
-      if ('fullDocument' in event && event.fullDocument !== null && event.fullDocument !== undefined) {
-        const fullDoc = event.fullDocument as unknown as { projectId?: string; _id?: unknown; [key: string]: unknown };
-        const projectId = fullDoc['projectId'];
-        if (typeof projectId === 'string') {
-          const channel = `alerts:fatal:${projectId}`;
-          await redis.publish(channel, JSON.stringify(fullDoc)).catch((err: unknown) => {
-            log.warn({ err, channel }, 'Redis PUBLISH failed');
+      this._holdsLock = true;
+      log.info({ nodeId: this.nodeId }, 'Acquired change stream leader lock');
+
+      // Start 10-second renewal timer (XX = only set if exists)
+      this._renewalTimer = setInterval(() => {
+        if (!this._holdsLock) return;
+        this.redis.client
+          .set(LEADER_KEY, this.nodeId, 'PX', LEADER_TTL_MS, 'XX')
+          .then((result) => {
+            if (result === null) {
+              log.warn({ nodeId: this.nodeId }, 'Lock renewal failed (key expired?) — will re-enter election');
+              this._holdsLock = false;
+            }
+          })
+          .catch((err: unknown) => {
+            log.warn({ err }, 'Lock renewal error');
+            this._holdsLock = false;
           });
-          log.debug({ projectId, eventId: fullDoc['_id'] }, 'Fatal event published');
+      }, LEADER_RENEW_MS);
+
+      try {
+        await this._watchFatalEvents();
+      } catch (err) {
+        log.error({ err }, 'Change stream watch loop error');
+      } finally {
+        this._holdsLock = false;
+        this._changeStream = null;
+        if (this._renewalTimer !== null) {
+          clearInterval(this._renewalTimer);
+          this._renewalTimer = null;
+        }
+        // Release lock if we still hold it
+        await this.redis.client.del(LEADER_KEY).catch((err: unknown) => {
+          log.warn({ err }, 'Error releasing leader lock after watch loop exit');
+        });
+      }
+
+      // Brief pause before re-entering election loop
+      if (this._running) {
+        await new Promise<void>((resolve) => setTimeout(resolve, LEADER_POLL_MS));
+      }
+    }
+
+    log.info('Change stream worker stopped');
+  }
+
+  async stop(): Promise<void> {
+    log.info('Stopping change stream worker');
+    this._running = false;
+
+    if (this._changeStream !== null) {
+      await this._changeStream.close().catch((err: unknown) => {
+        log.warn({ err }, 'Error closing change stream on stop');
+      });
+      this._changeStream = null;
+    }
+
+    if (this._renewalTimer !== null) {
+      clearInterval(this._renewalTimer);
+      this._renewalTimer = null;
+    }
+
+    if (this._holdsLock) {
+      await this.redis.client.del(LEADER_KEY).catch((err: unknown) => {
+        log.warn({ err }, 'Error releasing leader lock on stop');
+      });
+      this._holdsLock = false;
+    }
+  }
+
+  private async _watchFatalEvents(): Promise<void> {
+    // Read resume token from Redis HASH
+    const resumeTokenStr = await this.redis.client.hget(RESUME_HASH_KEY, 'token').catch(() => null);
+    let resumeToken: Record<string, unknown> | undefined;
+    if (resumeTokenStr !== null && resumeTokenStr !== undefined) {
+      try {
+        resumeToken = JSON.parse(resumeTokenStr) as Record<string, unknown>;
+      } catch {
+        resumeToken = undefined;
+      }
+    }
+
+    log.info({ nodeId: this.nodeId, hasResumeToken: resumeToken !== undefined }, 'Opening change stream');
+
+    const pipeline = [
+      {
+        $match: {
+          'fullDocument.severity': 'fatal',
+          operationType: 'insert',
+        },
+      },
+    ];
+
+    const changeStream = this.mongo.events().watch(pipeline, {
+      fullDocument: 'updateLookup',
+      ...(resumeToken !== undefined ? { resumeAfter: resumeToken } : {}),
+    });
+
+    this._changeStream = changeStream;
+
+    try {
+      for await (const event of changeStream) {
+        if (!this._holdsLock) {
+          log.warn({ nodeId: this.nodeId }, 'Lost leader lock mid-stream — closing change stream');
+          break;
+        }
+
+        // Publish insert events with a fullDocument to Redis pub/sub
+        if ('fullDocument' in event && event.fullDocument !== null && event.fullDocument !== undefined) {
+          const fullDoc = event.fullDocument as unknown as { projectId?: string; _id?: unknown; [key: string]: unknown };
+          const projectId = fullDoc['projectId'];
+          if (typeof projectId === 'string') {
+            const channel = `alerts:fatal:${projectId}`;
+            await this.redis.client.publish(channel, JSON.stringify(fullDoc)).catch((err: unknown) => {
+              log.warn({ err, channel }, 'Redis PUBLISH failed');
+            });
+            log.debug({ projectId, eventId: fullDoc['_id'] }, 'Fatal event published');
+          }
+        }
+
+        // Persist resume token in Redis HASH
+        const resumeId = event._id;
+        if (resumeId !== null && resumeId !== undefined) {
+          await this.redis.client
+            .hset(RESUME_HASH_KEY, 'token', JSON.stringify(resumeId))
+            .catch((err: unknown) => {
+              log.warn({ err }, 'Failed to persist resume token');
+            });
         }
       }
+    } catch (err) {
+      // ChangeStreamInvalidateDocument error or topology change — clear stale token and re-enter election
+      const isInvalidated =
+        err instanceof Error &&
+        (err.name === 'ChangeStreamInvalidatedError' ||
+          err.message.includes('invalidated') ||
+          err.message.includes('ChangeStreamHistoryLost'));
 
-      // Persist resume token
-      const resumeId = event._id;
-      if (resumeId !== null && resumeId !== undefined) {
-        await redis
-          .hset(RESUME_HASH_KEY, 'token', JSON.stringify(resumeId))
-          .catch((err: unknown) => {
-            log.warn({ err }, 'Failed to persist resume token');
-          });
+      if (isInvalidated) {
+        log.warn({ nodeId: this.nodeId }, 'Change stream invalidated — will re-open with no resume token');
+        await this.redis.client.hdel(RESUME_HASH_KEY, 'token').catch(() => undefined);
+      } else {
+        throw err;
+      }
+    } finally {
+      await changeStream.close().catch((err: unknown) => {
+        log.warn({ err }, 'Error closing change stream');
+      });
+      if (this._changeStream === changeStream) {
+        this._changeStream = null;
       }
     }
-  } catch (err) {
-    // ChangeStreamInvalidateDocument error or topology change — clear stale token and re-enter election
-    const isInvalidated =
-      err instanceof Error &&
-      (err.name === 'ChangeStreamInvalidatedError' ||
-        err.message.includes('invalidated') ||
-        err.message.includes('ChangeStreamHistoryLost'));
-
-    if (isInvalidated) {
-      log.warn({ nodeId }, 'Change stream invalidated — will re-open with no resume token');
-      await redis.hdel(RESUME_HASH_KEY, 'token').catch(() => undefined);
-    } else {
-      throw err;
-    }
-  } finally {
-    await changeStream.close().catch((err: unknown) => {
-      log.warn({ err }, 'Error closing change stream');
-    });
   }
 }

@@ -4,35 +4,25 @@
  * Connects all DBs and starts the Redis pub/sub subscriber for alert fan-out.
  */
 
-import * as pgDb from '../src/db/postgres.js';
-import * as mongoDb from '../src/db/mongo.js';
-import * as redisDb from '../src/db/redis.js';
-import { runAlertSubscriber } from '../src/workers/alert-subscriber.js';
+import { config } from '../src/config.js';
+import { AppContainer } from '../src/container.js';
+import { AlertSubscriber } from '../src/workers/alert-subscriber.js';
 import { logger } from '../src/logger.js';
 
 async function main(): Promise<void> {
   logger.info('Alert worker booting');
 
-  // Connect all data stores
-  await redisDb.connect();
-  await mongoDb.connect();
-
-  // PG pool connects lazily — verify with a health check
-  const pgHealth = await pgDb.healthCheck();
-  if (!pgHealth.ok) {
-    logger.error({ pgHealth }, 'PostgreSQL health check failed at startup');
-    process.exit(1);
-  }
-
+  const container = new AppContainer(config);
+  await container.initialize();
   logger.info('All DBs ready — starting alert subscriber');
+
+  const worker = new AlertSubscriber(container.pg, container.alerts);
 
   // Graceful shutdown
   const shutdown = async (): Promise<void> => {
     logger.info('Shutting down alert worker');
-    await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
-    await redisDb.close();
-    await mongoDb.close();
-    await pgDb.close();
+    await worker.stop();
+    await container.close();
     logger.info('Alert worker shutdown complete');
     process.exit(0);
   };
@@ -44,8 +34,8 @@ async function main(): Promise<void> {
     });
   });
 
-  // Run the alert subscriber (sets up pub/sub listeners and returns — stays alive via event loop)
-  await runAlertSubscriber();
+  // Start the alert subscriber (sets up pub/sub listeners)
+  await worker.start();
 
   logger.info('Alert worker ready, listening for pub/sub messages');
   // Keep the process alive — the ioredis subscriber holds the event loop open

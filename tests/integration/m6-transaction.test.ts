@@ -96,7 +96,23 @@ describe('M6: MongoDB Multi-Document Transactions', () => {
           { session }
         )
 
-        // Step 2: Simulate failure
+        // Step 3: Insert audit event inside the transaction BEFORE the failure so
+        // the test can prove it is rolled back alongside step 1 (not merely skipped).
+        await db.collection('events_m6').insertOne(
+          {
+            _id: `audit-${dashboardId}`,
+            type: 'audit',
+            action: 'dashboard_created',
+            dashboardId,
+            projectId,
+            userId,
+            createdAt: new Date(),
+          } as unknown as Document,
+          { session }
+        )
+
+        // Step 2: Simulate project_configs update failure — aborts the transaction,
+        // rolling back both the dashboard insert (step 1) and audit insert (step 3).
         throw new Error('Simulated step 2 failure')
       })
     } catch {
@@ -111,7 +127,7 @@ describe('M6: MongoDB Multi-Document Transactions', () => {
     const dash = await db.collection('dashboards_m6').findOne(byId(dashboardId))
     expect(dash).toBeNull()
 
-    // Step 3 (audit event) must not exist either
+    // Step 3 (audit event) was inserted within the transaction and must also be rolled back
     const audit = await db.collection('events_m6').findOne(byId(`audit-${dashboardId}`))
     expect(audit).toBeNull()
   })

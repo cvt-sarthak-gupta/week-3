@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import { Redis } from 'ioredis'
-import { getOrFill, invalidatePattern } from '../../src/lib/cache.js'
+import { getOrFill, invalidatePattern } from '../helpers/setup.js'
 
 const redis = new Redis({
   host: process.env['REDIS_HOST'] ?? 'localhost',

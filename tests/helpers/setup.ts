@@ -7,16 +7,17 @@
  *
  * Responsibilities:
  *  1. Force NODE_ENV=test
- *  2. Connect all DB clients using test ports from docker-compose.test.yml
- *  3. Export helper functions: truncateAll(), createTestTenant(), createTestEvent()
+ *  2. Build a testConfig and create an AppContainer instance
+ *  3. Initialize the container in beforeAll, close it in afterAll
+ *  4. Export backward-compatible helpers: getPgPool, getMongoDb, getMongoClient,
+ *     getRedisClient, getContainer, truncateAll, createTestTenant, createTestEvent,
+ *     setupTestDatabases, teardownTestDatabases
  */
 
 import { randomUUID } from 'node:crypto';
-import pg from 'pg';
-import { MongoClient } from 'mongodb';
-import { Redis } from 'ioredis';
 import { afterAll, beforeAll } from 'vitest';
-import * as mongoSingleton from '../../src/db/mongo.js';
+import { AppContainer } from '../../src/container.js';
+import { config } from '../../src/config.js';
 
 // ---------------------------------------------------------------------------
 // Force test environment
@@ -24,70 +25,110 @@ import * as mongoSingleton from '../../src/db/mongo.js';
 
 process.env['NODE_ENV'] = 'test';
 
+// ---------------------------------------------------------------------------
 // Test connection config (matches docker-compose.test.yml isolated ports)
+// ---------------------------------------------------------------------------
+
 const TEST_PG_HOST     = process.env['TEST_PG_HOST']     ?? 'localhost';
-const TEST_PG_PORT     = Number(process.env['TEST_PG_PORT'] ?? 5433);      // mapped to 5433
+const TEST_PG_PORT     = Number(process.env['TEST_PG_PORT']     ?? 5433);
 const TEST_PG_DATABASE = process.env['TEST_PG_DATABASE'] ?? 'pulseboard_test';
 const TEST_PG_USER     = process.env['TEST_PG_USER']     ?? 'postgres';
 const TEST_PG_PASSWORD = process.env['TEST_PG_PASSWORD'] ?? 'postgres';
 
-const TEST_MONGO_URL    = process.env['TEST_MONGO_URL']    ?? 'mongodb://localhost:27018/?replicaSet=rs0'; // 27018
-const TEST_MONGO_DB     = process.env['TEST_MONGO_DB']     ?? 'pulseboard_test';
+const TEST_MONGO_URL = process.env['TEST_MONGO_URL'] ?? 'mongodb://localhost:27018/?replicaSet=rs0';
+const TEST_MONGO_DB  = process.env['TEST_MONGO_DB']  ?? 'pulseboard_test';
 
 const TEST_REDIS_HOST = process.env['TEST_REDIS_HOST'] ?? 'localhost';
-const TEST_REDIS_PORT = Number(process.env['TEST_REDIS_PORT'] ?? 6380); // 6380
+const TEST_REDIS_PORT = Number(process.env['TEST_REDIS_PORT'] ?? 6380);
 
-// ---------------------------------------------------------------------------
-// Singleton clients (initialised in beforeAll)
-// ---------------------------------------------------------------------------
+const TEST_ES_URL = process.env['TEST_ES_URL'] ?? 'http://localhost:9201';
 
-let pgPool: pg.Pool;
-let mongoClient: MongoClient;
-let redisClient: Redis;
-
-// ---------------------------------------------------------------------------
-// Lifecycle — connect / disconnect
-// ---------------------------------------------------------------------------
-
-beforeAll(async () => {
-  // PostgreSQL
-  pgPool = new pg.Pool({
+// Build a testConfig that mirrors the shape of src/config.ts `config`
+const testConfig: typeof config = {
+  ...config,
+  node: 'test',
+  pg: Object.freeze({
     host: TEST_PG_HOST,
     port: TEST_PG_PORT,
     database: TEST_PG_DATABASE,
     user: TEST_PG_USER,
     password: TEST_PG_PASSWORD,
-    max: 5,
-    idleTimeoutMillis: 10_000,
-    connectionTimeoutMillis: 10_000,
-  });
-
-  // MongoDB — test helper's own client
-  mongoClient = new MongoClient(TEST_MONGO_URL, {
-    serverSelectionTimeoutMS: 15_000,
-    connectTimeoutMS: 15_000,
-  });
-  await mongoClient.connect();
-
-  // Also connect the src/db/mongo.ts singleton so domain functions (processEvent, etc.) work
-  await mongoSingleton.connect();
-
-  // Redis
-  redisClient = new Redis({
+    poolMin: 1,
+    poolMax: 5,
+  }),
+  mongo: Object.freeze({
+    url: TEST_MONGO_URL,
+    dbName: TEST_MONGO_DB,
+  }),
+  redis: Object.freeze({
     host: TEST_REDIS_HOST,
     port: TEST_REDIS_PORT,
-    lazyConnect: true,
-    maxRetriesPerRequest: 3,
-  });
-  await redisClient.connect();
+  }),
+  es: Object.freeze({
+    url: TEST_ES_URL,
+  }),
+};
+
+// ---------------------------------------------------------------------------
+// Singleton container (initialised in beforeAll)
+// ---------------------------------------------------------------------------
+
+let container: AppContainer;
+
+// ---------------------------------------------------------------------------
+// Lifecycle — initialize / close
+// ---------------------------------------------------------------------------
+
+beforeAll(async () => {
+  container = new AppContainer(testConfig);
+  await container.initialize();
 });
 
 afterAll(async () => {
-  await pgPool?.end();
-  await mongoSingleton.close();
-  await mongoClient?.close();
-  await redisClient?.quit();
+  await container?.close();
 });
+
+// ---------------------------------------------------------------------------
+// Adapter exports — backward-compatible with tests that used raw pg.Pool,
+// MongoClient, and ioredis.Redis directly.
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns an object whose .query() and .connect() signatures match pg.Pool,
+ * delegating to PostgresDatabase which has identical method signatures.
+ */
+export function getPgPool(): Pick<import('../../src/db/postgres.js').PostgresDatabase, 'query' | 'connect'> {
+  return container.pg;
+}
+
+/**
+ * Returns the mongodb.Db instance from the container's MongoDatabase.
+ */
+export function getMongoDb(): ReturnType<AppContainer['mongo']['db']> {
+  return container.mongo.db();
+}
+
+/**
+ * Returns the underlying MongoClient from mongodb.Db.
+ * mongodb.Db exposes .client on the Db instance.
+ */
+export function getMongoClient() {
+  return (container.mongo.db() as import('mongodb').Db & { client: import('mongodb').MongoClient }).client;
+}
+
+/**
+ * Returns the ioredis.Redis client from the container's RedisDatabase.
+ */
+export function getRedisClient(): import('ioredis').Redis {
+  return container.redis.client;
+}
+
+/**
+ * Returns the raw AppContainer for tests that need direct service access.
+ */
+export function getContainer(): AppContainer {
+  return container;
+}
 
 // ---------------------------------------------------------------------------
 // Helper: truncateAll
@@ -96,7 +137,7 @@ afterAll(async () => {
 
 export async function truncateAll(): Promise<void> {
   // PostgreSQL — truncate in dependency order
-  await pgPool.query(`
+  await container.pg.query(`
     TRUNCATE
       monthly_usage,
       usage_dedup,
@@ -108,17 +149,17 @@ export async function truncateAll(): Promise<void> {
     RESTART IDENTITY CASCADE
   `);
 
-  // MongoDB — drop and re-create the events collection
-  const db = mongoClient.db(TEST_MONGO_DB);
+  // MongoDB — clear all collections
+  const db = container.mongo.db();
   const colls = await db.listCollections().toArray();
   for (const coll of colls) {
     await db.collection(coll.name).deleteMany({});
   }
 
-  // Redis — flush only keys with the test prefix to avoid affecting other data
-  const keys = await redisClient.keys('*');
+  // Redis — flush all keys
+  const keys = await container.redis.client.keys('*');
   if (keys.length > 0) {
-    await redisClient.del(...keys);
+    await container.redis.client.del(...keys);
   }
 }
 
@@ -136,7 +177,7 @@ export interface TestTenantFixture {
 }
 
 export async function createTestTenant(): Promise<TestTenantFixture> {
-  const client = await pgPool.connect();
+  const client = await container.pg.connect();
   try {
     await client.query('BEGIN');
 
@@ -219,26 +260,6 @@ export function createTestEvent(overrides?: Partial<MinimalEventIngest>): Minima
 }
 
 // ---------------------------------------------------------------------------
-// Export clients for tests that need direct access
-// ---------------------------------------------------------------------------
-
-export function getPgPool(): pg.Pool {
-  return pgPool;
-}
-
-export function getMongoClient(): MongoClient {
-  return mongoClient;
-}
-
-export function getRedisClient(): Redis {
-  return redisClient;
-}
-
-export function getMongoDb() {
-  return mongoClient.db(TEST_MONGO_DB);
-}
-
-// ---------------------------------------------------------------------------
 // setupTestDatabases / teardownTestDatabases
 // Convenience wrappers called explicitly in cross-DB integration test suites
 // that do not rely on the global setupFiles lifecycle alone.
@@ -246,18 +267,18 @@ export function getMongoDb() {
 
 /**
  * Ensures all DB connections are alive and data is cleared.
- * Safe to call multiple times; re-uses existing singleton clients.
+ * Safe to call multiple times; re-uses the existing container singleton.
  */
 export async function setupTestDatabases(): Promise<void> {
-  // Clients are initialised by the beforeAll in this same file (via setupFiles).
-  // We wait until the singletons are ready by polling briefly if needed.
+  // The container is initialised by the beforeAll in this same file (via setupFiles).
+  // Poll briefly in case a suite-level call races against global setup.
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    if (pgPool && mongoClient && redisClient) break;
+    if (container) break;
     await new Promise<void>((r) => setTimeout(r, 100));
   }
-  if (!pgPool || !mongoClient || !redisClient) {
-    throw new Error('setupTestDatabases: DB clients did not initialise in time');
+  if (!container) {
+    throw new Error('setupTestDatabases: AppContainer did not initialise in time');
   }
   await truncateAll();
 }
@@ -268,6 +289,57 @@ export async function setupTestDatabases(): Promise<void> {
  * callers can await for symmetry.
  */
 export async function teardownTestDatabases(): Promise<void> {
-  // Intentionally a no-op: the module-level afterAll handles pool/client teardown.
-  // Individual test suites must NOT close the shared singletons early.
+  // Intentionally a no-op: the module-level afterAll handles container teardown.
+  // Individual test suites must NOT close the shared container early.
+}
+
+// ---------------------------------------------------------------------------
+// Domain function wrappers — let tests call these directly rather than
+// importing module-level functions that no longer exist after the class refactor
+// ---------------------------------------------------------------------------
+
+export type { IngestPayload } from '../../src/domain/ingestion.js';
+
+export async function processEvent(
+  payload: import('../../src/domain/ingestion.js').IngestPayload,
+): Promise<void> {
+  return getContainer().ingestion.processEvent(payload);
+}
+
+export async function onboardTenant(
+  input: Parameters<import('../../src/domain/tenants.js').TenantService['onboardTenant']>[0],
+): Promise<ReturnType<import('../../src/domain/tenants.js').TenantService['onboardTenant']>> {
+  return getContainer().tenants.onboardTenant(input);
+}
+
+export async function runAudit(): Promise<import('../../src/domain/consistency.js').AuditResult> {
+  return getContainer().consistency.runAudit();
+}
+
+export async function getOrFill<T>(
+  key: string,
+  ttlSeconds: number,
+  fetcher: () => Promise<T>,
+): Promise<T> {
+  return getContainer().cache.getOrFill(key, ttlSeconds, fetcher);
+}
+
+export async function invalidatePattern(pattern: string): Promise<number> {
+  return getContainer().cache.invalidatePattern(pattern);
+}
+
+export function getEsClient() {
+  return getContainer().es.client;
+}
+
+export async function ensureIlmPolicies(): Promise<void> {
+  return getContainer().es.ensureIlmPolicies();
+}
+
+export function resolveTierPolicy(retentionDays: number): string {
+  return getContainer().es.resolveTierPolicy(retentionDays);
+}
+
+export async function applyPolicyForProject(projectId: string, retentionDays: number): Promise<void> {
+  return getContainer().es.applyPolicyForProject(projectId, retentionDays);
 }

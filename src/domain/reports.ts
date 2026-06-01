@@ -1,7 +1,9 @@
-// Error intelligence and quota reports for PulseBoard.
+// Error intelligence and dashboard reports for PulseBoard.
 
-import { eventsCollection } from '../db/mongo.js';
-import { withClient } from '../db/postgres.js';
+import { MongoDatabase } from '../db/mongo.js';
+import { ElasticsearchDatabase } from '../db/elastic.js';
+import { RedisDatabase } from '../db/redis.js';
+import { CacheService } from '../lib/cache.js';
 import { logger } from '../logger.js';
 
 export interface ErrorIntelligenceReport {
@@ -31,231 +33,305 @@ export interface TenantQuotaRow {
   rank: number;
 }
 
-export async function getErrorIntelligence(
-  projectId: string,
-  days = 7,
-): Promise<ErrorIntelligenceReport> {
-  const now = new Date();
-  const windowStart = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-  const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+export class ReportService {
+  private readonly mongo: MongoDatabase;
+  private readonly es: ElasticsearchDatabase;
+  private readonly redis: RedisDatabase;
+  private readonly cache: CacheService;
 
-  const pipeline = [
-    // Stage 1: filter to project + time window
-    {
-      $match: {
-        projectId,
-        occurredAt: { $gte: windowStart },
-      },
-    },
-    // Stage 2: $facet with 4 sub-pipelines
-    {
-      $facet: {
-        // a. Top errors: group by fingerprint
-        topErrors: [
-          {
-            $group: {
-              _id: '$fingerprint',
-              message: { $first: '$message' },
-              count: { $sum: 1 },
-              firstSeen: { $min: '$occurredAt' },
-              lastSeen: { $max: '$occurredAt' },
-              affectedUsers: {
-                $addToSet: '$userContext.userId',
-              },
-            },
-          },
-          { $sort: { count: -1 } },
-          { $limit: 10 },
-          {
-            $project: {
-              _id: 0,
-              fingerprint: '$_id',
-              message: 1,
-              count: 1,
-              firstSeen: 1,
-              lastSeen: 1,
-              // Filter out null/undefined user IDs
-              affectedUsers: {
-                $filter: {
-                  input: '$affectedUsers',
-                  as: 'uid',
-                  cond: { $ne: ['$$uid', null] },
-                },
-              },
-            },
-          },
-        ],
-
-        // b. Hourly histogram: group by hour bucket
-        hourlyHistogram: [
-          {
-            $group: {
-              _id: {
-                $dateToString: {
-                  format: '%Y-%m-%dT%H:00:00Z',
-                  date: '$occurredAt',
-                  timezone: 'UTC',
-                },
-              },
-              count: { $sum: 1 },
-            },
-          },
-          { $sort: { _id: 1 } },
-          {
-            $project: {
-              _id: 0,
-              hour: '$_id',
-              count: 1,
-            },
-          },
-        ],
-
-        // c. Severity + browser breakdown
-        severityBrowser: [
-          {
-            $group: {
-              _id: {
-                severity: '$severity',
-                browser: '$deviceContext.browser',
-              },
-              count: { $sum: 1 },
-            },
-          },
-          { $sort: { count: -1 } },
-          {
-            $project: {
-              _id: 0,
-              severity: '$_id.severity',
-              browser: { $ifNull: ['$_id.browser', 'unknown'] },
-              count: 1,
-            },
-          },
-        ],
-
-        // d. New fingerprints: first seen within last 24h only
-        // Two-stage approach: group by fingerprint, keep only those whose
-        // firstSeen falls within the last 24h window.
-        newFingerprints: [
-          {
-            $group: {
-              _id: '$fingerprint',
-              firstSeen: { $min: '$occurredAt' },
-            },
-          },
-          {
-            $match: {
-              firstSeen: { $gte: last24h },
-            },
-          },
-          {
-            $project: {
-              _id: 0,
-              fingerprint: '$_id',
-            },
-          },
-        ],
-      },
-    },
-  ];
-
-  const results = await eventsCollection().aggregate(pipeline).toArray();
-  const facet = results[0] as {
-    topErrors: ErrorIntelligenceReport['topErrors'];
-    hourlyHistogram: ErrorIntelligenceReport['hourlyHistogram'];
-    severityBrowser: Array<{ severity: string; browser: string; count: number }>;
-    newFingerprints: Array<{ fingerprint: string }>;
-  } | undefined;
-
-  if (facet === undefined) {
-    logger.warn({ projectId, days }, 'getErrorIntelligence: no facet result');
-    return {
-      topErrors: [],
-      hourlyHistogram: [],
-      severityBrowserBreakdown: [],
-      newFingerprints: [],
-    };
+  constructor(
+    mongo: MongoDatabase,
+    es: ElasticsearchDatabase,
+    redis: RedisDatabase,
+    cache: CacheService,
+  ) {
+    this.mongo = mongo;
+    this.es = es;
+    this.redis = redis;
+    this.cache = cache;
   }
 
-  return {
-    topErrors: facet.topErrors,
-    hourlyHistogram: facet.hourlyHistogram,
-    severityBrowserBreakdown: facet.severityBrowser,
-    newFingerprints: facet.newFingerprints.map((r) => r.fingerprint),
-  };
-}
+  async getErrorIntelligenceReport(
+    projectId: string,
+    days = 7,
+  ): Promise<unknown> {
+    const cacheKey = `report:error-intelligence:${projectId}:${days}`;
+    const ttlSeconds = 300; // 5 minutes
 
-export async function getTenantQuotaReport(): Promise<TenantQuotaRow[]> {
-  return withClient(async (client) => {
-    const now = new Date();
-    const thisYear = now.getUTCFullYear();
-    const thisMonth = now.getUTCMonth() + 1;
+    return this.cache.getOrFill<ErrorIntelligenceReport>(
+      cacheKey,
+      ttlSeconds,
+      async () => {
+        const now = new Date();
+        const windowStart = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+        const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-    // Previous month calculation
-    const prevMonth = thisMonth === 1 ? 12 : thisMonth - 1;
-    const prevYear = thisMonth === 1 ? thisYear - 1 : thisYear;
+        const pipeline = [
+          // Stage 1: filter to project + time window
+          {
+            $match: {
+              projectId,
+              occurredAt: { $gte: windowStart },
+            },
+          },
+          // Stage 2: $facet with 4 sub-pipelines
+          {
+            $facet: {
+              // a. Top errors: group by fingerprint
+              topErrors: [
+                {
+                  $group: {
+                    _id: '$fingerprint',
+                    message: { $first: '$message' },
+                    count: { $sum: 1 },
+                    firstSeen: { $min: '$occurredAt' },
+                    lastSeen: { $max: '$occurredAt' },
+                    affectedUsers: {
+                      $addToSet: '$userContext.userId',
+                    },
+                  },
+                },
+                { $sort: { count: -1 } },
+                { $limit: 10 },
+                {
+                  $project: {
+                    _id: 0,
+                    fingerprint: '$_id',
+                    message: 1,
+                    count: 1,
+                    firstSeen: 1,
+                    lastSeen: 1,
+                    // Filter out null/undefined user IDs
+                    affectedUsers: {
+                      $filter: {
+                        input: '$affectedUsers',
+                        as: 'uid',
+                        cond: { $ne: ['$$uid', null] },
+                      },
+                    },
+                  },
+                },
+              ],
 
-    const result = await client.query<{
-      tenant_id: string;
-      tenant_name: string;
-      this_month_events: string; // BIGINT comes back as string in node-pg
-      prev_month_events: string;
-      growth_rate: string | null;
-      rank: string;
-    }>(
-      `
-      WITH month_agg AS (
-        SELECT
-          mu.tenant_id,
-          SUM(mu.event_count) AS this_month
-        FROM monthly_usage mu
-        WHERE mu.year = $1 AND mu.month = $2
-        GROUP BY mu.tenant_id
-      ),
-      prev_month_agg AS (
-        SELECT
-          mu.tenant_id,
-          SUM(mu.event_count) AS prev_month
-        FROM monthly_usage mu
-        WHERE mu.year = $3 AND mu.month = $4
-        GROUP BY mu.tenant_id
-      ),
-      ranked AS (
-        SELECT
-          t.id                                              AS tenant_id,
-          t.name                                            AS tenant_name,
-          COALESCE(m.this_month, 0)                         AS this_month_events,
-          COALESCE(p.prev_month, 0)                         AS prev_month_events,
-          CASE
-            WHEN COALESCE(p.prev_month, 0) = 0 THEN NULL
-            ELSE (COALESCE(m.this_month, 0) - COALESCE(p.prev_month, 0))::NUMERIC
-                 / NULLIF(p.prev_month, 0)
-          END                                               AS growth_rate,
-          RANK() OVER (ORDER BY COALESCE(m.this_month, 0) DESC) AS rank
-        FROM tenants t
-        LEFT JOIN month_agg      m ON m.tenant_id = t.id
-        LEFT JOIN prev_month_agg p ON p.tenant_id = t.id
-        WHERE t.is_active = true
-      )
-      SELECT
-        tenant_id,
-        tenant_name,
-        this_month_events,
-        prev_month_events,
-        growth_rate,
-        rank
-      FROM ranked
-      ORDER BY rank ASC, tenant_name ASC
-      `,
-      [thisYear, thisMonth, prevYear, prevMonth],
+              // b. Hourly histogram: group by hour bucket
+              hourlyHistogram: [
+                {
+                  $group: {
+                    _id: {
+                      $dateToString: {
+                        format: '%Y-%m-%dT%H:00:00Z',
+                        date: '$occurredAt',
+                        timezone: 'UTC',
+                      },
+                    },
+                    count: { $sum: 1 },
+                  },
+                },
+                { $sort: { _id: 1 } },
+                {
+                  $project: {
+                    _id: 0,
+                    hour: '$_id',
+                    count: 1,
+                  },
+                },
+              ],
+
+              // c. Severity + browser breakdown
+              severityBrowser: [
+                {
+                  $group: {
+                    _id: {
+                      severity: '$severity',
+                      browser: '$deviceContext.browser',
+                    },
+                    count: { $sum: 1 },
+                  },
+                },
+                { $sort: { count: -1 } },
+                {
+                  $project: {
+                    _id: 0,
+                    severity: '$_id.severity',
+                    browser: { $ifNull: ['$_id.browser', 'unknown'] },
+                    count: 1,
+                  },
+                },
+              ],
+
+              // d. New fingerprints: first seen within last 24h only
+              // Two-stage approach: group by fingerprint, keep only those whose
+              // firstSeen falls within the last 24h window.
+              newFingerprints: [
+                {
+                  $group: {
+                    _id: '$fingerprint',
+                    firstSeen: { $min: '$occurredAt' },
+                  },
+                },
+                {
+                  $match: {
+                    firstSeen: { $gte: last24h },
+                  },
+                },
+                {
+                  $project: {
+                    _id: 0,
+                    fingerprint: '$_id',
+                  },
+                },
+              ],
+            },
+          },
+        ];
+
+        const results = await this.mongo.events().aggregate(pipeline).toArray();
+        const facet = results[0] as
+          | {
+              topErrors: ErrorIntelligenceReport['topErrors'];
+              hourlyHistogram: ErrorIntelligenceReport['hourlyHistogram'];
+              severityBrowser: Array<{ severity: string; browser: string; count: number }>;
+              newFingerprints: Array<{ fingerprint: string }>;
+            }
+          | undefined;
+
+        if (facet === undefined) {
+          logger.warn({ projectId, days }, 'getErrorIntelligenceReport: no facet result');
+          return {
+            topErrors: [],
+            hourlyHistogram: [],
+            severityBrowserBreakdown: [],
+            newFingerprints: [],
+          };
+        }
+
+        return {
+          topErrors: facet.topErrors,
+          hourlyHistogram: facet.hourlyHistogram,
+          severityBrowserBreakdown: facet.severityBrowser,
+          newFingerprints: facet.newFingerprints.map((r) => r.fingerprint),
+        };
+      },
     );
+  }
 
-    return result.rows.map((row) => ({
-      tenantId: row.tenant_id,
-      tenantName: row.tenant_name,
-      thisMonthEvents: parseInt(row.this_month_events, 10),
-      prevMonthEvents: parseInt(row.prev_month_events, 10),
-      growthRate: row.growth_rate !== null ? parseFloat(row.growth_rate) : null,
-      rank: parseInt(row.rank, 10),
-    }));
-  });
+  async getDashboardReport(projectId: string): Promise<unknown> {
+    const cacheKey = `report:dashboard:${projectId}`;
+    const ttlSeconds = 120; // 2 minutes
+
+    return this.cache.getOrFill(cacheKey, ttlSeconds, async () => {
+      const now = new Date();
+      const windowStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const alias = this.es.aliasName(projectId);
+
+      const response = await this.es.client.search({
+        index: alias,
+        size: 0,
+        query: {
+          bool: {
+            filter: [
+              { term: { projectId } },
+              {
+                range: {
+                  occurredAt: {
+                    gte: windowStart.toISOString(),
+                    lte: now.toISOString(),
+                  },
+                },
+              },
+            ],
+          },
+        },
+        aggs: {
+          // Events over time: one bucket per hour for the 7-day window
+          events_over_time: {
+            date_histogram: {
+              field: 'occurredAt',
+              calendar_interval: 'hour',
+              min_doc_count: 0,
+              extended_bounds: {
+                min: windowStart.toISOString(),
+                max: now.toISOString(),
+              },
+            },
+          },
+
+          // Severity breakdown
+          by_severity: {
+            terms: {
+              field: 'severity',
+              size: 10,
+            },
+          },
+
+          // Top affected users with latest event sample via top_hits
+          top_affected_users: {
+            terms: {
+              field: 'userContext.userId',
+              size: 10,
+              order: { _count: 'desc' },
+              min_doc_count: 1,
+            },
+            aggs: {
+              latest_event: {
+                top_hits: {
+                  size: 1,
+                  sort: [{ occurredAt: { order: 'desc' } }],
+                  _source: {
+                    includes: ['message', 'severity', 'occurredAt', 'fingerprint'],
+                  },
+                },
+              },
+            },
+          },
+
+          // Significant error terms relative to background corpus
+          significant_error_terms: {
+            significant_terms: {
+              field: 'message.keyword',
+              size: 10,
+              background_filter: {
+                term: { projectId },
+              },
+            },
+          },
+
+          // Overall error rate vs warning rate
+          error_rate: {
+            filter: {
+              terms: { severity: ['error', 'fatal'] },
+            },
+          },
+        },
+      });
+
+      const aggs = response.aggregations as Record<string, unknown> | undefined;
+
+      if (!aggs) {
+        logger.warn({ projectId }, 'getDashboardReport: no aggregations returned');
+        return {
+          eventsOverTime: [],
+          bySeverity: [],
+          topAffectedUsers: [],
+          significantErrorTerms: [],
+          errorCount: 0,
+          totalCount: response.hits.total,
+        };
+      }
+
+      return {
+        eventsOverTime: (aggs['events_over_time'] as { buckets: unknown[] })?.buckets ?? [],
+        bySeverity: (aggs['by_severity'] as { buckets: unknown[] })?.buckets ?? [],
+        topAffectedUsers: (aggs['top_affected_users'] as { buckets: unknown[] })?.buckets ?? [],
+        significantErrorTerms:
+          (aggs['significant_error_terms'] as { buckets: unknown[] })?.buckets ?? [],
+        errorCount: (aggs['error_rate'] as { doc_count: number })?.doc_count ?? 0,
+        totalCount: response.hits.total,
+      };
+    });
+  }
+
+  async invalidateProjectReports(projectId: string): Promise<void> {
+    await this.cache.invalidatePattern(`report:*:${projectId}*`);
+  }
 }
