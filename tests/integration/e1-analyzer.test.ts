@@ -59,6 +59,7 @@ describe('E1: Custom Analyzer & Nested Types', () => {
             message: {
               type: 'text',
               analyzer: 'logs_analyzer',
+              search_analyzer: 'standard',
             },
             severity: { type: 'keyword' },
             projectId: { type: 'keyword' },
@@ -141,6 +142,8 @@ describe('E1: Custom Analyzer & Nested Types', () => {
     expect(props.tags.properties.value.type).toBe('keyword')
     expect(props.severity.type).toBe('keyword')
     expect(props.message.type).toBe('text')
+    // search_analyzer must be 'standard' so edge-ngrams are NOT applied at query time
+    expect(props.message.search_analyzer).toBe('standard')
   })
 
   it('nested query for env=production returns docs that have that tag', async () => {

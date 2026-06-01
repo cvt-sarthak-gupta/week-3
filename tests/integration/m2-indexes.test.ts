@@ -2,15 +2,17 @@
  * M2: MongoDB compound index coverage — no COLLSCAN
  *
  * Verifies that the indexes declared in the MongoDB schema are actually used
- * for the four core query patterns (Q1, Q2, Q5 from the design doc) by
+ * for all five core query patterns (Q1–Q5 from the design doc) by
  * inspecting the executionStats explain plan and asserting no COLLSCAN stage
  * appears.
  *
  * Indexes under test:
- *   { projectId: 1, severity: 1, occurredAt: -1 }
- *   { projectId: 1, fingerprint: 1, occurredAt: -1 }
- *   { 'tags.env': 1, 'tags.service': 1 }
- *   { projectId: 1, 'userContext.email': 1 }
+ *   { projectId: 1, severity: 1, occurredAt: -1 }   Q1
+ *   { projectId: 1, fingerprint: 1, occurredAt: -1 } Q2
+ *   { 'tags.env': 1, 'tags.service': 1 }             Q3
+ *   { projectId: 1, occurredAt: -1 } (via Q1 index)  Q4
+ *   { projectId: 1, 'userContext.email': 1 }          Q5
+ *   { ingestedAt: 1 }                                 TTL (safety-net)
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -40,6 +42,7 @@ beforeAll(async () => {
   await col.createIndex({ projectId: 1, fingerprint: 1, occurredAt: -1 })
   await col.createIndex({ 'tags.env': 1, 'tags.service': 1 })
   await col.createIndex({ projectId: 1, 'userContext.email': 1 })
+  await col.createIndex({ ingestedAt: 1 }, { expireAfterSeconds: 400 * 86_400 })
 
   // Seed 100 documents so executionStats has enough data to prefer indexes
   type Severity = 'error' | 'fatal' | 'info' | 'warn' | 'debug'
@@ -118,7 +121,7 @@ describe('M2: MongoDB Index Coverage', () => {
     assertNoCollScan(explain)
   })
 
-  it('all five indexes appear in the collection index list', async () => {
+  it('all five query indexes plus TTL index appear in the collection index list', async () => {
     const indexes = await collection().indexes()
     const indexKeys = indexes.map((idx) => JSON.stringify(idx.key))
 
@@ -126,6 +129,8 @@ describe('M2: MongoDB Index Coverage', () => {
     expect(indexKeys).toContain(JSON.stringify({ projectId: 1, fingerprint: 1, occurredAt: -1 }))
     expect(indexKeys).toContain(JSON.stringify({ 'tags.env': 1, 'tags.service': 1 }))
     expect(indexKeys).toContain(JSON.stringify({ projectId: 1, 'userContext.email': 1 }))
+    // TTL safety-net index (created in beforeAll alongside the query indexes)
+    expect(indexKeys).toContain(JSON.stringify({ ingestedAt: 1 }))
   })
 
   it('Q1 returns only the expected severity documents', async () => {

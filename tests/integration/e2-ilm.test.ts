@@ -20,7 +20,29 @@ describe('E2: ILM Tier Policies', () => {
     expect(result).toHaveProperty('logs-tier-30d')
     const policy = (result['logs-tier-30d'] as Record<string, unknown>)
     const phases = ((policy['policy'] as Record<string, unknown>)?.['phases'] as Record<string, unknown>)
+
+    // Hot phase: rollover at 7d and 5gb
     expect(phases).toHaveProperty('hot')
+    const hotActions = (phases['hot'] as Record<string, unknown>)?.['actions'] as Record<string, unknown>
+    expect(hotActions).toHaveProperty('rollover')
+    const rollover = hotActions['rollover'] as Record<string, unknown>
+    expect(rollover['max_age']).toBe('7d')
+    expect(rollover['max_primary_shard_size']).toBe('5gb')
+
+    // Warm phase: forcemerge 1 segment + shrink to 1 shard
+    expect(phases).toHaveProperty('warm')
+    const warmActions = (phases['warm'] as Record<string, unknown>)?.['actions'] as Record<string, unknown>
+    expect(warmActions).toHaveProperty('forcemerge')
+    expect((warmActions['forcemerge'] as Record<string, unknown>)?.['max_num_segments']).toBe(1)
+    expect(warmActions).toHaveProperty('shrink')
+    expect((warmActions['shrink'] as Record<string, unknown>)?.['number_of_shards']).toBe(1)
+
+    // Cold phase: exists, does NOT contain a freeze action (deprecated in ES 8.x)
+    expect(phases).toHaveProperty('cold')
+    const coldActions = (phases['cold'] as Record<string, unknown>)?.['actions'] as Record<string, unknown> | undefined
+    expect(coldActions).not.toHaveProperty('freeze')
+
+    // Delete phase: exists
     expect(phases).toHaveProperty('delete')
   })
 

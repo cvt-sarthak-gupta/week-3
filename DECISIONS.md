@@ -357,3 +357,21 @@ The following were considered and explicitly rejected for this implementation:
 - **Horizontal PostgreSQL scaling (read replicas):** The current design uses a single PG pool. Read replicas are the natural next step if the quota report query (P3) or audit log queries become bottlenecks.
 
 - **Kafka instead of Redis Streams:** Redis Streams are simpler operationally (already in stack, lower latency) and sufficient at the current ingestion volume. Kafka's partition-based ordering guarantees and indefinite log retention would be relevant at 100M+ events/day with replay requirements beyond 7 days.
+
+---
+
+## D22 — project_configs as a separate MongoDB collection, not embedded in PostgreSQL projects table
+
+**Chosen:** `project_configs` is a standalone MongoDB collection keyed by the same UUID as the PG `projects` row. It holds SDK settings, sampling rates, ignored errors, retention overrides, and dashboard IDs.
+
+**Alternatives considered:**
+1. Add a `settings JSONB` column to the PG `projects` table — all config in one row.
+2. Embed config as a sub-document inside each `events` document — co-locate config with data.
+
+**Why not in PG projects:** The settings are write-heavy during project setup and updated frequently by SDK configuration pushes. They are schema-flexible — different project types use different settings keys. A JSONB column in PG would work, but it would force every config update through the relational connection pool, add lock contention on the `projects` table, and prevent schema evolution without a migration. MongoDB's document model handles arbitrary settings keys natively.
+
+**Why not embedded in events:** Events are written millions of times per day; embedding per-event config would duplicate 1M+ copies of the same config object and make config updates require rewriting every event. Events and config have completely independent write patterns and lifetimes.
+
+**Why a separate MongoDB collection:** `project_configs` is queried at project setup, during change-stream processing (to check `alertsEnabled`), and by the retention job (to get per-project settings). It is not queried on the hot ingest path. A dedicated collection with `_id = projectId` gives O(1) lookup by project ID, is easy to maintain transactionally (X2 saga: insert config, rollback if ES fails), and keeps the events collection clean and append-only.
+
+**Trade-off:** The projectId must be consistent between PG and MongoDB. The seed script (seed/index.ts) explicitly reads PG project IDs and upserts corresponding project_configs documents to maintain this consistency.

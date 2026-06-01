@@ -25,22 +25,18 @@ describe('E6: Reindex with Alias Swap (zero downtime)', () => {
   beforeAll(async () => {
     await esClient.indices.create({
       index: V1,
-      body: {
-        mappings: {
-          properties: {
-            projectId: { type: 'keyword' },
-            severity: { type: 'keyword' },
-            message: { type: 'text' },
-            occurredAt: { type: 'date' },
-            eventId: { type: 'keyword' },
-          },
+      mappings: {
+        properties: {
+          projectId: { type: 'keyword' },
+          severity: { type: 'keyword' },
+          message: { type: 'text' },
+          occurredAt: { type: 'date' },
+          eventId: { type: 'keyword' },
         },
       },
     })
     await esClient.indices.updateAliases({
-      body: {
-        actions: [{ add: { index: V1, alias: ALIAS, is_write_index: true } }],
-      },
+      actions: [{ add: { index: V1, alias: ALIAS, is_write_index: true } }],
     })
   })
 
@@ -62,25 +58,23 @@ describe('E6: Reindex with Alias Swap (zero downtime)', () => {
         eventId: `baseline-${i}`,
       })
     }
-    await esClient.bulk({ refresh: true, body: baselineOps })
+    await esClient.bulk({ refresh: true, operations: baselineOps })
 
-    const { body: v1Before } = await esClient.count({ index: V1 }) as unknown as { body: { count: number } }
-    const v1BeforeCount = v1Before?.count ?? (await esClient.count({ index: V1 }) as unknown as { count: number }).count
+    const v1BeforeResult = await esClient.count({ index: V1 }) as unknown as { count: number }
+    const v1BeforeCount = v1BeforeResult.count
     expect(v1BeforeCount).toBe(50)
 
     // Create v2 with updated mapping (adds fingerprint)
     await esClient.indices.create({
       index: V2,
-      body: {
-        mappings: {
-          properties: {
-            projectId: { type: 'keyword' },
-            severity: { type: 'keyword' },
-            message: { type: 'text' },
-            occurredAt: { type: 'date' },
-            eventId: { type: 'keyword' },
-            fingerprint: { type: 'keyword' },
-          },
+      mappings: {
+        properties: {
+          projectId: { type: 'keyword' },
+          severity: { type: 'keyword' },
+          message: { type: 'text' },
+          occurredAt: { type: 'date' },
+          eventId: { type: 'keyword' },
+          fingerprint: { type: 'keyword' },
         },
       },
     })
@@ -97,7 +91,7 @@ describe('E6: Reindex with Alias Swap (zero downtime)', () => {
         await esClient.index({
           index: ALIAS,
           id: docId,
-          body: {
+          document: {
             projectId: 'e6-test',
             severity: 'warn',
             message: `Writer ${i}`,
@@ -110,15 +104,13 @@ describe('E6: Reindex with Alias Swap (zero downtime)', () => {
       }
     })()
 
-    // Reindex v1 → v2 asynchronously
-    const { body: reindexBody } = await esClient.reindex({
+    // Reindex v1 → v2 asynchronously — ES8 client returns task ID at top level
+    const reindexResult = await esClient.reindex({
       wait_for_completion: false,
-      body: { source: { index: V1 }, dest: { index: V2 } },
-    }) as unknown as { body: { task: string } }
-    const taskId: string = reindexBody?.task ?? (await esClient.reindex({
-      wait_for_completion: false,
-      body: { source: { index: V1 }, dest: { index: V2 } },
-    }) as unknown as { task: string }).task
+      source: { index: V1 },
+      dest: { index: V2 },
+    }) as unknown as { task: string }
+    const taskId: string = reindexResult.task
 
     // Poll task until complete
     let done = false
@@ -138,14 +130,12 @@ describe('E6: Reindex with Alias Swap (zero downtime)', () => {
     }
     expect(done).toBe(true)
 
-    // Atomic alias swap
+    // Atomic alias swap — ES8 client takes actions at top level
     await esClient.indices.updateAliases({
-      body: {
-        actions: [
-          { remove: { index: V1, alias: ALIAS } },
-          { add: { index: V2, alias: ALIAS, is_write_index: true } },
-        ],
-      },
+      actions: [
+        { remove: { index: V1, alias: ALIAS } },
+        { add: { index: V2, alias: ALIAS, is_write_index: true } },
+      ],
     })
     swapped = true
 
@@ -156,17 +146,17 @@ describe('E6: Reindex with Alias Swap (zero downtime)', () => {
 
     await esClient.indices.refresh({ index: V2 })
 
-    const v2Result = await esClient.count({ index: V2 }) as unknown as { count?: number; body?: { count: number } }
-    const v2Count = v2Result.count ?? v2Result.body?.count ?? 0
+    const v2CountResult = await esClient.count({ index: V2 }) as unknown as { count: number }
+    const v2Count = v2CountResult.count
 
     expect(v2Count).toBeGreaterThanOrEqual(50) // at least the 50 baseline docs
 
     // All baseline docs must exist in v2 (eventId as _id → idempotent)
-    const baselineResult = await esClient.count({
+    const baselineCountResult = await esClient.count({
       index: V2,
-      body: { query: { prefix: { eventId: { value: 'baseline-' } } } },
-    }) as unknown as { count?: number; body?: { count: number } }
-    const baselineCount = baselineResult.count ?? baselineResult.body?.count ?? 0
+      query: { prefix: { eventId: { value: 'baseline-' } } },
+    }) as unknown as { count: number }
+    const baselineCount = baselineCountResult.count
     expect(baselineCount).toBe(50)
 
     console.log(`E6: v2=${v2Count} docs, post-swap-writes=${postSwapWrites}`)

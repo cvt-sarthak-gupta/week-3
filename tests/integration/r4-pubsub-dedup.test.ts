@@ -19,7 +19,7 @@ describe('R4: Pub/Sub Alert Deduplication', () => {
     return c
   }
 
-  it('3 subscribers all receive the message but exactly 1 fires via SET NX lock', async () => {
+  it('3 subscribers (psubscribe pattern) all receive the message but exactly 1 fires via SET NX lock', async () => {
     const publisher = makeClient()
     const sub1 = makeClient()
     const sub2 = makeClient()
@@ -30,7 +30,8 @@ describe('R4: Pub/Sub Alert Deduplication', () => {
     const eventId = `event-${Date.now()}`
     // Lock key is per-alertRuleId only (60s cooldown), matching production AlertService.fireDedupAlert
     const lockKey = `fire-lock:${alertRuleId}`
-    const channel = `alerts:fatal:proj-test-${Date.now()}`
+    const projectId = `proj-test-${Date.now()}`
+    const channel = `alerts:fatal:${projectId}`
 
     let firedCount = 0
     const receivedBy: string[] = []
@@ -42,12 +43,13 @@ describe('R4: Pub/Sub Alert Deduplication', () => {
       if (won === 'OK') firedCount++
     }
 
-    // Subscribe all 3
-    await Promise.all([sub1, sub2, sub3].map(s => s.subscribe(channel)))
+    // Use psubscribe (pattern subscribe) — matches production AlertSubscriber which uses
+    // psubscribe('alerts:fatal:*'). pmessage event receives (pattern, channel, message).
+    await Promise.all([sub1, sub2, sub3].map(s => s.psubscribe('alerts:fatal:*')))
 
-    sub1.on('message', (_, msg) => handleAlert(msg, 'sub1'))
-    sub2.on('message', (_, msg) => handleAlert(msg, 'sub2'))
-    sub3.on('message', (_, msg) => handleAlert(msg, 'sub3'))
+    sub1.on('pmessage', (_, _ch, msg) => handleAlert(msg, 'sub1'))
+    sub2.on('pmessage', (_, _ch, msg) => handleAlert(msg, 'sub2'))
+    sub3.on('pmessage', (_, _ch, msg) => handleAlert(msg, 'sub3'))
 
     // Wait for subscriptions to register
     await new Promise(r => setTimeout(r, 150))
@@ -71,8 +73,8 @@ describe('R4: Pub/Sub Alert Deduplication', () => {
     const channel = `alerts:fatal:proj-cooldown-${Date.now()}`
     let firedCount = 0
 
-    await sub.subscribe(channel)
-    sub.on('message', async (_, msg) => {
+    await sub.psubscribe('alerts:fatal:*')
+    sub.on('pmessage', async (_, _ch, msg) => {
       const { alertRuleId: ruleId } = JSON.parse(msg) as { alertRuleId: string }
       // Per-rule lock — same key for both events
       const lockKey = `fire-lock:${ruleId}`
@@ -101,8 +103,8 @@ describe('R4: Pub/Sub Alert Deduplication', () => {
     const channel = `alerts:fatal:proj-multi-${Date.now()}`
     let firedCount = 0
 
-    await sub.subscribe(channel)
-    sub.on('message', async (_, msg) => {
+    await sub.psubscribe('alerts:fatal:*')
+    sub.on('pmessage', async (_, _ch, msg) => {
       const { alertRuleId } = JSON.parse(msg) as { alertRuleId: string }
       const lockKey = `fire-lock:${alertRuleId}`
       const won = await lockClient.set(lockKey, 'sub', 'EX', 60, 'NX')
