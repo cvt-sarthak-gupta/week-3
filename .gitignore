@@ -39,3 +39,7 @@ Thumbs.db
 .eslintcache
 .parcel-cache
 .turbo
+
+# ── Claude Code ───────────────────────────────────────────────────────────────
+.claude/
+CLAUDE.md
