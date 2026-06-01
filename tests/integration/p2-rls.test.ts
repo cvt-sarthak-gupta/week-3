@@ -152,9 +152,9 @@ describe('P2: Row-Level Security', () => {
     // Insert an alert rule for tenant A's project (as superuser, bypassing RLS)
     const ruleId = crypto.randomUUID()
     await pool.query(
-      `INSERT INTO alert_rules (id, project_id, name, condition_type, window_seconds, notification_channel, es_query)
-       VALUES ($1, $2, 'Test Rule', 'threshold', 60, 'email', '{}')`,
-      [ruleId, tenantA.projectId],
+      `INSERT INTO alert_rules (id, project_id, tenant_id, name, condition_type, window_seconds, notification_channel, es_query)
+       VALUES ($1, $2, $3, 'Test Rule', 'threshold', 60, 'email', '{}')`,
+      [ruleId, tenantA.projectId, tenantA.tenantId],
     )
 
     // Attempt to read it as tenant B (RLS should filter it out)
