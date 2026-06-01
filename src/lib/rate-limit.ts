@@ -42,6 +42,8 @@ export class RateLimitService {
   async checkRateLimit(
     apiKey: string,
     config: RateLimitConfig,
+    /** Number of slots to consume atomically.  Use batch size for bulk ingestion. */
+    count = 1,
   ): Promise<RateLimitResult> {
     const script = await this.getScript();
     const key = `rl:apikey:${apiKey}`;
@@ -58,6 +60,7 @@ export class RateLimitService {
         String(config.maxRequests),
         String(now),
         reqId,
+        String(count),
       )) as [number, number, number];
     } catch (err) {
       // Redis down — fail open: allow the request and log a warning

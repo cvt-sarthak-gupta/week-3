@@ -145,9 +145,14 @@ export function ingestRoutes(container: AppContainer): FastifyPluginAsync {
         const { id: projectId, tenantId, apiKey } = project;
 
         const planId = await getTenantPlanId(tenantId);
-        const rateLimitConfig = await container.rateLimit.getPlanRateLimit(planId ?? 'default');
+        const rateLimitConfig = planId !== null
+          ? await container.rateLimit.getPlanRateLimit(planId)
+          : { windowMs: 60_000, maxRequests: 1_000 }; // safe fallback
 
-        const rateResult = await container.rateLimit.checkRateLimit(apiKey, rateLimitConfig);
+        // For a batch request consume one slot per event so that batching
+        // cannot be used to circumvent per-request rate limits.
+        const batchSize = Array.isArray(request.body) ? (request.body as EventBody[]).length : 1;
+        const rateResult = await container.rateLimit.checkRateLimit(apiKey, rateLimitConfig, batchSize);
 
         if (!rateResult.allowed) {
           // Log violation to MongoDB (fire-and-forget, never block the 429 response)

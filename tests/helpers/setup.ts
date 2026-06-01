@@ -339,7 +339,8 @@ export async function ensureIlmPolicies(): Promise<void> {
 }
 
 export function resolveTierPolicy(retentionDays: number): string {
-  return getContainer().es.resolveTierPolicy(retentionDays);
+  // Policy name follows the pattern used by ensureIlmPolicy().
+  return `logs-retention-${retentionDays}d`;
 }
 
 export async function applyPolicyForProject(projectId: string, retentionDays: number): Promise<void> {

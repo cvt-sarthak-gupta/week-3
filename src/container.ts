@@ -13,6 +13,7 @@ import { ProjectService } from './domain/projects.js';
 import { ReportService } from './domain/reports.js';
 import { ConsistencyService } from './domain/consistency.js';
 import { RetentionService } from './domain/retention.js';
+import { DashboardService } from './domain/dashboards.js';
 import { config } from './config.js';
 
 export class AppContainer {
@@ -31,6 +32,7 @@ export class AppContainer {
   readonly reports: ReportService;
   readonly consistency: ConsistencyService;
   readonly retention: RetentionService;
+  readonly dashboards: DashboardService;
 
   constructor(cfg: typeof config) {
     this.pg = new PostgresDatabase({
@@ -56,6 +58,7 @@ export class AppContainer {
     this.reports = new ReportService(this.mongo, this.es, this.redis, this.cache);
     this.consistency = new ConsistencyService(this.pg, this.mongo, this.es);
     this.retention = new RetentionService(this.pg, this.mongo);
+    this.dashboards = new DashboardService(this.mongo);
   }
 
   async initialize(): Promise<void> {
@@ -64,9 +67,18 @@ export class AppContainer {
       this.mongo.connect(),
       this.redis.connect(),
     ]);
+
+    // Apply MongoDB schema validation + compound indexes to the events and logs
+    // collections.  Idempotent — safe to call on every startup.
+    await this.mongo.ensureEventsCollection();
+
+    // Ensure ES index template, ILM policies, and percolator index exist.
     await this.es.ensureSetup();
+
+    // Load Lua scripts into Redis and get their SHAs cached.
     await this.redis.loadLua('sliding-window');
     await this.redis.loadLua('dedup-fire');
+
     await this.redis.ensureConsumerGroup(STREAM_KEY, CONSUMER_GROUP);
   }
 

@@ -3,16 +3,9 @@ import { logger } from '../logger.js';
 
 export const percolatorIndex = 'alert_percolator';
 
-interface TierPolicy {
-  name: string;
-  deleteAfterRolloverDays: number;
-}
-
-const TIER_POLICIES: TierPolicy[] = [
-  { name: 'logs-tier-30d', deleteAfterRolloverDays: 30 },
-  { name: 'logs-tier-90d', deleteAfterRolloverDays: 90 },
-  { name: 'logs-tier-365d', deleteAfterRolloverDays: 365 },
-];
+// Cache of retentionDays values whose ILM policy has already been confirmed to
+// exist in the cluster.  Avoids redundant putLifecycle calls on every ingest.
+const _knownIlmPolicies = new Set<number>();
 
 export class ElasticsearchDatabase {
   private readonly _client: Client;
@@ -58,67 +51,74 @@ export class ElasticsearchDatabase {
   // ---------------------------------------------------------------------------
 
   /**
-   * Creates or updates all three ILM lifecycle policies at startup.
+   * Creates or updates a single ILM lifecycle policy named
+   * `logs-retention-<N>d` where N is the exact retentionDays value.
+   *
+   * This gives every unique retention value its own precisely-scoped policy
+   * (e.g. 45d deletes after exactly 45 days, not the nearest tier bucket).
+   * Policy names are cached in-process so repeat calls are no-ops.
    *
    * Phases:
-   *   hot   → rollover at 7d / 5 GB, priority 100
-   *   warm  → enter 7d after rollover, forcemerge (1 segment), shrink to 1 shard
-   *   cold  → enter 30d after rollover, searchable-snapshot / freeze
-   *   delete → enter `deleteAfterRolloverDays` after rollover
+   *   hot    → rollover at 7d / 5 GB, priority 100
+   *   warm   → enter 7d after rollover, forcemerge (1 segment), shrink to 1 shard
+   *   cold   → enter 30d after rollover, priority 0
+   *   delete → enter retentionDays after rollover
    */
-  async ensureIlmPolicies(): Promise<void> {
-    for (const policy of TIER_POLICIES) {
-      const body: Parameters<typeof this._client.ilm.putLifecycle>[0] = {
-        name: policy.name,
-        policy: {
-          phases: {
-            hot: {
-              min_age: '0ms',
-              actions: {
-                rollover: {
-                  max_age: '7d',
-                  max_primary_shard_size: '5gb',
-                },
-                set_priority: { priority: 100 },
+  async ensureIlmPolicy(retentionDays: number): Promise<string> {
+    const policyName = `logs-retention-${retentionDays}d`;
+
+    if (_knownIlmPolicies.has(retentionDays)) {
+      return policyName;
+    }
+
+    await this._client.ilm.putLifecycle({
+      name: policyName,
+      policy: {
+        phases: {
+          hot: {
+            min_age: '0ms',
+            actions: {
+              rollover: {
+                max_age: '7d',
+                max_primary_shard_size: '5gb',
               },
-            },
-            warm: {
-              min_age: '7d',
-              actions: {
-                set_priority: { priority: 50 },
-                forcemerge: { max_num_segments: 1 },
-                shrink: { number_of_shards: 1 },
-              },
-            },
-            cold: {
-              min_age: '30d',
-              actions: {
-                set_priority: { priority: 0 },
-                // freeze is deprecated in ES 8.x; cold phase simply reduces shard priority
-              },
-            },
-            delete: {
-              min_age: `${policy.deleteAfterRolloverDays}d`,
-              actions: {
-                delete: {},
-              },
+              set_priority: { priority: 100 },
             },
           },
+          warm: {
+            min_age: '7d',
+            actions: {
+              set_priority: { priority: 50 },
+              forcemerge: { max_num_segments: 1 },
+              shrink: { number_of_shards: 1 },
+            },
+          },
+          cold: {
+            min_age: '30d',
+            actions: {
+              set_priority: { priority: 0 },
+            },
+          },
+          delete: {
+            min_age: `${retentionDays}d`,
+            actions: { delete: {} },
+          },
         },
-      };
+      },
+    });
 
-      await this._client.ilm.putLifecycle(body);
-      logger.info({ policy: policy.name }, 'Elasticsearch ILM policy ensured');
-    }
+    _knownIlmPolicies.add(retentionDays);
+    logger.info({ policyName, retentionDays }, 'Elasticsearch ILM policy ensured');
+    return policyName;
   }
 
   /**
-   * Maps a retention value (days) to one of the three named ILM policies.
+   * Convenience wrapper — ensures the three standard retention policies exist
+   * at startup so the most common values are ready without waiting for the
+   * first project to be onboarded.
    */
-  resolveTierPolicy(retentionDays: number): string {
-    if (retentionDays <= 30) return 'logs-tier-30d';
-    if (retentionDays <= 90) return 'logs-tier-90d';
-    return 'logs-tier-365d';
+  async ensureIlmPolicies(): Promise<void> {
+    await Promise.all([30, 90, 365].map((d) => this.ensureIlmPolicy(d)));
   }
 
   // ---------------------------------------------------------------------------
@@ -302,7 +302,7 @@ export class ElasticsearchDatabase {
    */
   async applyPolicyForProject(projectId: string, retentionDays: number): Promise<void> {
     await this.ensureSetup();
-    const policyName = this.resolveTierPolicy(retentionDays);
+    const policyName = await this.ensureIlmPolicy(retentionDays);
     const idx = this.indexName(projectId);
     const alias = this.aliasName(projectId);
 

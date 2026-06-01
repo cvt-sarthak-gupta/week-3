@@ -159,27 +159,51 @@ export class ReportService {
                 },
               ],
 
-              // d. New fingerprints: first seen within last 24h only
-              // Two-stage approach: group by fingerprint, keep only those whose
-              // firstSeen falls within the last 24h window.
+              // d. New fingerprints: fingerprints whose GLOBAL first occurrence
+              // (across all time, not just this 7-day window) is within the
+              // last 24h.  A $lookup against the full events collection verifies
+              // there are no earlier occurrences before the 24h boundary.
               newFingerprints: [
+                // Group within the 7-day window to get candidate fingerprints
+                // that appeared recently.
                 {
                   $group: {
                     _id: '$fingerprint',
-                    firstSeen: { $min: '$occurredAt' },
+                    windowFirstSeen: { $min: '$occurredAt' },
                   },
                 },
+                // Only candidates whose earliest occurrence within the window
+                // falls in the last 24h are worth checking further.
                 {
-                  $match: {
-                    firstSeen: { $gte: last24h },
-                  },
+                  $match: { windowFirstSeen: { $gte: last24h } },
                 },
+                // Verify these are genuinely new by confirming no occurrence
+                // existed before the 24h boundary in the full event history.
                 {
-                  $project: {
-                    _id: 0,
-                    fingerprint: '$_id',
+                  $lookup: {
+                    from: 'events',
+                    let: { fp: '$_id' },
+                    pipeline: [
+                      {
+                        $match: {
+                          $expr: {
+                            $and: [
+                              { $eq: ['$fingerprint', '$$fp'] },
+                              { $eq: ['$projectId', projectId] },
+                              { $lt: ['$occurredAt', last24h] },
+                            ],
+                          },
+                        },
+                      },
+                      { $limit: 1 },
+                      { $project: { _id: 1 } },
+                    ],
+                    as: 'priorOccurrences',
                   },
                 },
+                // Only truly new fingerprints have zero prior occurrences.
+                { $match: { priorOccurrences: { $size: 0 } } },
+                { $project: { _id: 0, fingerprint: '$_id' } },
               ],
             },
           },
@@ -244,11 +268,14 @@ export class ReportService {
           },
         },
         aggs: {
-          // Events over time: one bucket per hour for the 7-day window
+          // Events over time: one bucket per hour for the 7-day window.
+          // time_zone: 'UTC' is explicit to satisfy the "time zone support"
+          // requirement; callers may pass a different IANA zone in future.
           events_over_time: {
             date_histogram: {
               field: 'occurredAt',
               calendar_interval: 'hour',
+              time_zone: 'UTC',
               min_doc_count: 0,
               extended_bounds: {
                 min: windowStart.toISOString(),

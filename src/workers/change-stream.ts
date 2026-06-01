@@ -146,8 +146,10 @@ export class ChangeStreamWorker {
       },
     ];
 
+    // fullDocument is always present for insert events; updateLookup adds a
+    // round-trip for updates but this stream is filtered to inserts only, so
+    // the default ('default') is sufficient.
     const changeStream = this.mongo.events().watch(pipeline, {
-      fullDocument: 'updateLookup',
       ...(resumeToken !== undefined ? { resumeAfter: resumeToken } : {}),
     });
 
@@ -160,22 +162,11 @@ export class ChangeStreamWorker {
           break;
         }
 
-        // Persist resume token BEFORE publishing so that on a crash-and-restart
-        // the stream reopens past this event (at-most-once delivery per event).
-        // Duplicate webhook fires are already prevented by the dedup-fire lock in
-        // AlertService.fireDedupAlert(), so missing one publish is preferable to
-        // creating duplicate incidents. This is the standard "checkpoint then act"
-        // pattern for stream processors.
-        const resumeId = event._id;
-        if (resumeId !== null && resumeId !== undefined) {
-          await this.redis.client
-            .hset(RESUME_HASH_KEY, 'token', JSON.stringify(resumeId))
-            .catch((err: unknown) => {
-              log.warn({ err }, 'Failed to persist resume token');
-            });
-        }
-
-        // Publish insert events with a fullDocument to Redis pub/sub
+        // At-least-once delivery: publish FIRST, then checkpoint the resume
+        // token.  If the process crashes between publish and token-save the
+        // stream reopens at the same position and we republish — the dedup-fire
+        // lock in AlertService.fireDedupAlert() prevents duplicate webhook
+        // calls within the 60-second cooldown window.
         if ('fullDocument' in event && event.fullDocument !== null && event.fullDocument !== undefined) {
           const fullDoc = event.fullDocument as unknown as { projectId?: string; _id?: unknown; [key: string]: unknown };
           const projectId = fullDoc['projectId'];
@@ -191,6 +182,16 @@ export class ChangeStreamWorker {
               log.warn({ err, projectId }, 'onFatalEvent cache-invalidation callback failed (non-fatal)');
             });
           }
+        }
+
+        // Checkpoint the resume token AFTER publishing (at-least-once semantics).
+        const resumeId = event._id;
+        if (resumeId !== null && resumeId !== undefined) {
+          await this.redis.client
+            .hset(RESUME_HASH_KEY, 'token', JSON.stringify(resumeId))
+            .catch((err: unknown) => {
+              log.warn({ err }, 'Failed to persist resume token');
+            });
         }
       }
     } catch (err) {

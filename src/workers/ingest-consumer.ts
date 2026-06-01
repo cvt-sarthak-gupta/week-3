@@ -30,10 +30,12 @@ export class IngestConsumer {
   constructor(
     private readonly redis: RedisDatabase,
     private readonly ingestion: IngestionService,
+    /** Unique consumer name within the group.  Defaults to pid for single-worker compat. */
+    private readonly consumerName: string = `ingest-consumer-${process.pid}`,
   ) {}
 
   async start(): Promise<void> {
-    const workerName = `ingest-consumer-${process.pid}`;
+    const workerName = this.consumerName;
     const log = createWorkerLogger(workerName);
     log.info({ stream: STREAM_KEY, group: CONSUMER_GROUP }, 'Ingest consumer starting');
 

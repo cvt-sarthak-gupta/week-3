@@ -66,6 +66,31 @@ export interface PipelineMetricsDocument {
   meta?: Record<string, unknown>;
 }
 
+// ─── MongoDB JSON Schema validator applied to the production events collection ─
+
+const EVENTS_VALIDATOR = {
+  $jsonSchema: {
+    bsonType: 'object',
+    required: ['_id', 'projectId', 'type', 'severity', 'message', 'occurredAt', 'ingestedAt', 'fingerprint'],
+    properties: {
+      _id:          { bsonType: 'string' },
+      projectId:    { bsonType: 'string' },
+      type:         { enum: ['error', 'log', 'metric', 'custom'] },
+      severity:     { enum: ['debug', 'info', 'warn', 'error', 'fatal'] },
+      message:      { bsonType: 'string' },
+      occurredAt:   { bsonType: 'date' },
+      ingestedAt:   { bsonType: 'date' },
+      fingerprint:  { bsonType: 'string' },
+      payload:      {},               // any shape — intentionally unconstrained
+      tags:         { bsonType: 'object' },
+      userContext:  { bsonType: 'object' },
+      deviceContext:{ bsonType: 'object' },
+      stackTrace:   { bsonType: 'array' },
+    },
+    additionalProperties: true,
+  },
+};
+
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 2_000;
 
@@ -155,6 +180,11 @@ export class MongoDatabase {
     return this.db().collection<EventDocument>('events');
   }
 
+  /** Structured application logs with arbitrary metadata (separate from raw events). */
+  logs(): Collection<LogDocument> {
+    return this.db().collection<LogDocument>('logs');
+  }
+
   dashboards(): Collection<DashboardDocument> {
     return this.db().collection<DashboardDocument>('dashboards');
   }
@@ -175,6 +205,68 @@ export class MongoDatabase {
     resetAt: Date;
   }> {
     return this.db().collection('rate_limit_violations');
+  }
+
+  /**
+   * Applies the JSON Schema validator and required compound indexes to the
+   * production `events` collection.  Called once at startup via AppContainer.
+   *
+   * - Uses `createCollection` on first run (collection does not exist yet).
+   * - Falls back to `collMod` when the collection already exists so the
+   *   validator and indexes are always in sync regardless of startup order.
+   * - `createIndex` calls are idempotent; MongoDB ignores duplicate index
+   *   definitions that are identical.
+   */
+  async ensureEventsCollection(): Promise<void> {
+    const db = this.db();
+
+    // Ensure collection exists with the validator.
+    try {
+      await db.createCollection('events', {
+        validator: EVENTS_VALIDATOR,
+        validationLevel: 'strict',
+        validationAction: 'error',
+      });
+      logger.info('MongoDB: events collection created with schema validator');
+    } catch (err: unknown) {
+      // NamespaceExists (code 48) means the collection already exists — update
+      // the validator in place.
+      const mongoCode = (err as { code?: unknown }).code;
+      if (err instanceof Error && (err.message.includes('already exists') || mongoCode === 48)) {
+        await db.command({
+          collMod: 'events',
+          validator: EVENTS_VALIDATOR,
+          validationLevel: 'strict',
+          validationAction: 'error',
+        });
+        logger.info('MongoDB: events collection validator updated (collection already existed)');
+      } else {
+        throw err;
+      }
+    }
+
+    // Ensure the same validator on `logs` collection.
+    try {
+      await db.createCollection('logs');
+      logger.info('MongoDB: logs collection created');
+    } catch {
+      // Already exists — ignore.
+    }
+
+    // Compound indexes for the five M2 query patterns + TTL safety-net.
+    const col = this.events();
+    await Promise.all([
+      col.createIndex({ projectId: 1, severity: 1, occurredAt: -1 }),    // Q1
+      col.createIndex({ projectId: 1, fingerprint: 1, occurredAt: -1 }), // Q2
+      col.createIndex({ 'tags.env': 1, 'tags.service': 1 }),             // Q3
+      col.createIndex({ projectId: 1, 'userContext.email': 1 }),          // Q5
+      col.createIndex({ ingestedAt: 1 }, { expireAfterSeconds: 400 * 86_400 }), // TTL safety-net
+    ]);
+    logger.info('MongoDB: events collection indexes ensured');
+
+    // Logs collection index.
+    await this.logs().createIndex({ projectId: 1, timestamp: -1 });
+    logger.info('MongoDB: logs collection indexes ensured');
   }
 
   async healthCheck(): Promise<{ ok: boolean; latencyMs: number }> {

@@ -21,6 +21,7 @@ import { leaderboardRoutes } from '../src/routes/leaderboard.js';
 import { healthRoutes } from '../src/routes/health.js';
 import { metricsRoutes } from '../src/routes/metrics.js';
 import { consistencyRoutes } from '../src/routes/consistency.js';
+import { dashboardRoutes } from '../src/routes/dashboards.js';
 
 // ---------------------------------------------------------------------------
 // Build
@@ -110,6 +111,7 @@ async function build(container: AppContainer): Promise<ReturnType<typeof Fastify
     await v1.register(leaderboardRoutes(container));
     await v1.register(ingestRoutes(container));
     await v1.register(consistencyRoutes(container));
+    await v1.register(dashboardRoutes(container));
   }, { prefix: '/v1' });
 
   return fastify;

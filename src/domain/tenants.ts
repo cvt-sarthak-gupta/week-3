@@ -296,23 +296,18 @@ export class TenantService {
       ],
     );
 
-    return result.rows.map((row) => {
-      const quota = row.event_quota_per_month;
-      const used = Number(row.this_month_events);
-      const percent = quota !== null && quota > 0 ? Math.round((used / quota) * 100) : 0;
-
-      return {
-        tenantId: row.tenant_id,
-        tenantName: row.tenant_name,
-        planName: row.plan_name,
-        eventQuotaPerMonth: quota,
-        eventsThisMonth: used,
-        percentUsed: percent,
-        rank: Number(row.rank),
-        exceeded80pct: row.exceeded_80pct,
-        momGrowthPct: row.mom_growth_pct !== null ? Number(row.mom_growth_pct) : null,
-      };
-    });
+    return result.rows.map((row) => ({
+      tenantId: row.tenant_id,
+      tenantName: row.tenant_name,
+      planName: row.plan_name,
+      eventQuotaPerMonth: row.event_quota_per_month,
+      eventsThisMonth: Number(row.this_month_events),
+      // Use the SQL-computed percentage (2 dp, consistent with exceeded_80pct logic).
+      percentUsed: Number(row.usage_pct),
+      rank: Number(row.rank),
+      exceeded80pct: row.exceeded_80pct,
+      momGrowthPct: row.mom_growth_pct !== null ? Number(row.mom_growth_pct) : null,
+    }));
   }
 
   async getTenantById(tenantId: string): Promise<unknown> {

@@ -41,6 +41,11 @@ async function runConcurrent<T, R>(
   return results;
 }
 
+interface TenantProjectGroup {
+  tenantId: string;
+  projects: ProjectRow[];
+}
+
 export class ConsistencyService {
   private readonly pg: PostgresDatabase;
   private readonly mongo: MongoDatabase;
@@ -52,9 +57,10 @@ export class ConsistencyService {
     this.es = es;
   }
 
-  private async auditProject(project: ProjectRow): Promise<Inconsistency[]> {
+  /** Checks per-project: Mongo config exists + ES index exists. */
+  private async auditProjectResources(project: ProjectRow): Promise<Inconsistency[]> {
     const issues: Inconsistency[] = [];
-    const { id: projectId, tenant_id: tenantId } = project;
+    const { id: projectId } = project;
 
     // (a) Check Mongo: project_configs document exists
     try {
@@ -87,29 +93,60 @@ export class ConsistencyService {
       logger.warn({ err, projectId }, 'consistency audit: ES index check failed');
     }
 
-    // (c) Check count drift: PG monthly_usage SUM vs Mongo events count
+    return issues;
+  }
+
+  /**
+   * Checks count drift at the TENANT level.
+   *
+   * monthly_usage is keyed by (tenant_id, year, month) — not per project.
+   * Comparing it against a single project's Mongo count would always show
+   * drift for tenants with multiple projects.  The correct comparison is:
+   *
+   *   PG  : SUM(event_count) across all months for this tenant
+   *   Mongo: COUNT of events across ALL projects belonging to this tenant
+   *
+   * A 1% tolerance accounts for in-flight events and usage_dedup lag.
+   */
+  private async auditTenantCountDrift(group: TenantProjectGroup): Promise<Inconsistency[]> {
+    const issues: Inconsistency[] = [];
+    const { tenantId, projects } = group;
+    const projectIds = projects.map((p) => p.id);
+
     try {
       const pgResult = await this.pg.query<{ total: string }>(
-        `SELECT COALESCE(SUM(event_count), 0)::text AS total FROM monthly_usage WHERE tenant_id = $1`,
+        `SELECT COALESCE(SUM(event_count), 0)::text AS total
+           FROM monthly_usage
+          WHERE tenant_id = $1`,
         [tenantId],
       );
       const pgTotal = parseInt(pgResult.rows[0]?.total ?? '0', 10);
-      const mongoTotal = await this.mongo.events().countDocuments({ projectId });
 
-      // Allow 1% tolerance
+      // Sum Mongo events across all projects belonging to this tenant.
+      const mongoTotal = await this.mongo.events().countDocuments({
+        projectId: { $in: projectIds },
+      });
+
       const tolerance = Math.ceil(Math.max(pgTotal, mongoTotal) * 0.01);
       const drift = Math.abs(pgTotal - mongoTotal);
 
       if (drift > tolerance && (pgTotal > 0 || mongoTotal > 0)) {
+        // Report against the first project for surfacing purposes; details
+        // include the full tenant context.
         issues.push({
           kind: 'count_drift',
-          projectId,
-          details: `PG monthly_usage sum=${pgTotal}, Mongo events count=${mongoTotal}, drift=${drift} (tolerance=${tolerance})`,
-          suggestion: `Investigate dropped events or usage_dedup inconsistencies for projectId=${projectId} (tenantId=${tenantId})`,
+          projectId: projectIds[0] ?? tenantId,
+          details:
+            `Tenant ${tenantId}: PG monthly_usage sum=${pgTotal}, ` +
+            `Mongo events across ${projectIds.length} project(s)=${mongoTotal}, ` +
+            `drift=${drift} (tolerance=${tolerance})`,
+          suggestion:
+            `Investigate dropped events or usage_dedup inconsistencies for tenantId=${tenantId}. ` +
+            `Project IDs: ${projectIds.join(', ')}`,
         });
       }
     } catch (err) {
-      logger.warn({ err, projectId }, 'consistency audit: count drift check failed');
+      logger.warn({ err, tenantId }, 'consistency audit: count drift check failed');
     }
 
     return issues;
@@ -125,12 +162,30 @@ export class ConsistencyService {
     );
     const projects = pgResult.rows;
 
-    // 2. Audit each project in batches of 10 in parallel
-    const allIssues = (
-      await runConcurrent(projects, 10, (p) => this.auditProject(p))
+    // 2. Per-project resource checks (Mongo config + ES index) in batches of 10.
+    const resourceIssues = (
+      await runConcurrent(projects, 10, (p) => this.auditProjectResources(p))
     ).flat();
 
-    // 3. Check for orphaned Mongo configs (project_configs docs without a PG project)
+    // 3. Per-tenant count drift check.
+    //    Group projects by tenant so the PG sum and Mongo count are compared
+    //    at the same granularity (tenant total vs tenant total).
+    const tenantMap = new Map<string, ProjectRow[]>();
+    for (const project of projects) {
+      const list = tenantMap.get(project.tenant_id) ?? [];
+      list.push(project);
+      tenantMap.set(project.tenant_id, list);
+    }
+    const tenantGroups: TenantProjectGroup[] = Array.from(tenantMap.entries()).map(
+      ([tenantId, ps]) => ({ tenantId, projects: ps }),
+    );
+    const driftIssues = (
+      await runConcurrent(tenantGroups, 10, (g) => this.auditTenantCountDrift(g))
+    ).flat();
+
+    const allIssues = [...resourceIssues, ...driftIssues];
+
+    // 4. Check for orphaned Mongo configs (project_configs docs without a PG project)
     try {
       const projectIds = new Set(projects.map((p) => p.id));
       const mongoCursor = this.mongo.projectConfigs().find(
@@ -154,7 +209,7 @@ export class ConsistencyService {
 
     const duration_ms = Date.now() - startMs;
 
-    // 4. Build summary
+    // 5. Build summary
     const byKind: Record<string, number> = {};
     for (const issue of allIssues) {
       byKind[issue.kind] = (byKind[issue.kind] ?? 0) + 1;

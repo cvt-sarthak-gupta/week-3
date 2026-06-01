@@ -51,6 +51,10 @@ export class PostgresDatabase {
       // before interpolating to prevent SQL injection.
       const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRe.test(tenantId)) throw new Error(`withTenant: invalid tenantId: ${tenantId}`);
+      // Switch to the non-superuser role so RLS policies are actually enforced.
+      // SET LOCAL is transaction-scoped: the role reverts automatically on COMMIT/ROLLBACK,
+      // so the pool connection is returned as the original postgres superuser.
+      await client.query('SET LOCAL ROLE app_user');
       await client.query(`SET LOCAL "app.current_tenant_id" = '${tenantId}'`);
       const result = await fn(client);
       await client.query('COMMIT');
