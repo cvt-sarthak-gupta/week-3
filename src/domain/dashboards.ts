@@ -101,31 +101,28 @@ export class DashboardService {
   }
 
   async listDashboards(projectId: string): Promise<DashboardResult[]> {
+    // Fetch the dashboardIds registered for this project from project_configs.
+    // This avoids scanning the entire dashboards collection.
+    const config = await this.mongo.projectConfigs().findOne({ _id: projectId });
+    const dashboardIds = (config?.settings?.['dashboardIds'] as string[] | undefined) ?? [];
+
+    if (dashboardIds.length === 0) return [];
+
+    // Fetch only the relevant dashboard documents by ID.
     const docs = await this.mongo
       .dashboards()
-      .find({ tenantId: { $exists: true } as Record<string, unknown> })
+      .find({ _id: { $in: dashboardIds } })
       .sort({ createdAt: -1 })
       .toArray();
 
-    // Filter in application (project_configs links dashboardIds; dashboards
-    // don't store projectId directly — they store tenantId).
-    // For now return all dashboards for the tenant that match the project via
-    // the project_configs dashboardIds list.
-    const config = await this.mongo.projectConfigs().findOne({ _id: projectId });
-    const allowedIds = new Set<string>(
-      (config?.settings?.['dashboardIds'] as string[] | undefined) ?? [],
-    );
-
-    return docs
-      .filter((d) => allowedIds.has(d._id))
-      .map((d) => ({
-        id: d._id,
-        projectId,
-        tenantId: d.tenantId,
-        name: d.name,
-        layout: d.layout,
-        createdAt: d.createdAt,
-        updatedAt: d.updatedAt,
-      }));
+    return docs.map((d) => ({
+      id: d._id,
+      projectId,
+      tenantId: d.tenantId,
+      name: d.name,
+      layout: d.layout,
+      createdAt: d.createdAt,
+      updatedAt: d.updatedAt,
+    }));
   }
 }

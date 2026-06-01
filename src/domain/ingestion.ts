@@ -53,6 +53,7 @@ export class IngestionService {
     eventId: string,
     traceId: string,
     fn: () => Promise<T>,
+    projectId = '',
   ): Promise<T> {
     const start = Date.now();
     let success = false;
@@ -80,7 +81,7 @@ export class IngestionService {
       // overwrites the existing metric instead of throwing a duplicate key error.
       const metricDoc = {
         _id: `${eventId}:${name}`,
-        projectId: '',
+        projectId,
         pipelineId: traceId,
         stage: name,
         durationMs: entry.durationMs,
@@ -179,7 +180,7 @@ export class IngestionService {
     let validated!: EventIngest;
     await this.traceStage('validate', eventId, traceId, async () => {
       validated = EventIngestSchema.parse(raw);
-    });
+    }, projectId);
 
     // Stage 2: enrich — build the full EventDocument
     let doc!: EventDocument;
@@ -234,7 +235,7 @@ export class IngestionService {
         } : {}),
         ...(validated.payload !== undefined ? { payload: validated.payload } : {}),
       };
-    });
+    }, projectId);
 
     // Stage 3: insert to MongoDB — canonical write; failure causes event to stay in stream for retry
     await this.traceStage('mongo', eventId, traceId, async () => {
@@ -245,7 +246,7 @@ export class IngestionService {
           { upsert: true },
         ),
       );
-    });
+    }, projectId);
 
     // Stage 4: index to Elasticsearch — best-effort; if ES is down skip and continue
     // (ES is a projection of Mongo; it can be rebuilt by replay)
@@ -277,7 +278,7 @@ export class IngestionService {
         // ES down: log and continue — Mongo is canonical, ES can be replayed
         logger.warn({ eventId, err }, 'ES indexing skipped (circuit open or ES unavailable)');
       }
-    });
+    }, projectId);
 
     // Stage 5: PG usage accounting — best-effort; if PG is down push to retry queue
     await this.traceStage('pg-usage', eventId, traceId, async () => {
@@ -296,12 +297,15 @@ export class IngestionService {
         await this.redis.client.rpush(`usage:retry:${tenantId}`, eventId).catch(() => {});
         logger.warn({ eventId, tenantId, err }, 'PG usage deferred to retry queue (PG down)');
       }
-    });
+    }, projectId);
 
     // Stage 6: ES percolator check — async fire-and-forget.
-    // Percolation contributes ~55ms p95 to the critical path but its result (alert matches)
-    // is written to the alert-matches Redis stream, not returned to the caller. Running it
-    // async brings pipeline p95 from ~135ms to ~80ms while keeping correctness intact.
+    // Percolation runs against all events (not just fatal) to catch rules on any severity.
+    // Results are published to the same Redis Pub/Sub channel the AlertSubscriber already
+    // listens on (alerts:fatal:<projectId>).  The dedup lock in fireDedupAlert() prevents
+    // double-firing for fatal events that also come through the MongoDB change stream path.
+    // Previously this wrote to an unconsumed `alert-matches` Redis stream, causing unbounded
+    // memory growth and silent alert drops for non-fatal matched events.
     void this.traceStage('percolate', eventId, traceId, async () => {
       try {
         // Convert tags from Record<string,string> to nested [{key,value}] format
@@ -342,31 +346,27 @@ export class IngestionService {
 
           const hits = response.hits.hits;
           if (hits.length > 0) {
-            const pipeline = this.redis.client.pipeline();
-            for (const hit of hits) {
-              pipeline.xadd(
-                'alert-matches',
-                '*',
-                'alertRuleId', hit._id ?? '',
-                'eventId', eventId,
-                'projectId', projectId,
-                'tenantId', tenantId,
-                'fingerprint', doc.fingerprint,
-                'severity', doc.severity,
-                'message', doc.message.slice(0, 500),
-              );
-            }
-            await pipeline.exec();
+            // Publish the event doc to the alerts channel so the AlertSubscriber
+            // fires the matched rules via its dedup-fire lock mechanism.
+            // Use PUBLISH (Pub/Sub) not XADD (stream) so messages are not accumulated
+            // without a consumer.
+            const channel = `alerts:fatal:${projectId}`;
+            await this.redis.client.publish(channel, JSON.stringify({
+              ...doc,
+              // occurredAt/ingestedAt must be strings so JSON.parse in the subscriber works
+              occurredAt: doc.occurredAt.toISOString(),
+              ingestedAt: doc.ingestedAt.toISOString(),
+            }));
             logger.info(
-              { eventId, matchCount: hits.length, projectId },
-              'percolator matches published to alert-matches stream',
+              { eventId, matchCount: hits.length, projectId, channel },
+              'percolator matches published to alert channel',
             );
           }
         });
       } catch (err) {
         logger.warn({ eventId, err }, 'percolation skipped (ES unavailable)');
       }
-    }).catch((err) => {
+    }, projectId).catch((err) => {
       logger.warn({ eventId, projectId, err }, 'percolation stage threw unexpectedly');
     });
 
@@ -385,7 +385,7 @@ export class IngestionService {
       pipeline.zincrby(leaderboardKey, 1, projectId);
       pipeline.expireat(leaderboardKey, midnightUnixSeconds);
       await pipeline.exec();
-    });
+    }, projectId);
 
     logger.debug({ eventId, projectId, traceId }, 'event processed successfully');
   }

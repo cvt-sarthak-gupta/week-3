@@ -76,8 +76,12 @@ export function leaderboardRoutes(container: AppContainer): FastifyPluginAsync {
         const dateKey = todayKey();
         const redisKey = `leaderboard:${dateKey}`;
 
-        // Returns flat array: [member1, score1, member2, score2, ...]
-        const raw = await container.redis.client.zrevrange(redisKey, 0, -1, 'WITHSCORES');
+        // Fetch a bounded slice of the global sorted set.  Fetching 0..-1 (all)
+        // loads every project across all tenants; cap at a multiple of LEADERBOARD_TOP_N
+        // so we always have enough candidates to filter down to the tenant's top N
+        // without scanning the entire set.  1000 is a safe upper bound for most deployments.
+        const MAX_GLOBAL_FETCH = 1000;
+        const raw = await container.redis.client.zrevrange(redisKey, 0, MAX_GLOBAL_FETCH - 1, 'WITHSCORES');
 
         const allEntries: Array<{ projectId: string; score: number }> = [];
         for (let i = 0; i < raw.length; i += 2) {

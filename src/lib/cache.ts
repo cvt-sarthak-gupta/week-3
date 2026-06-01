@@ -60,8 +60,16 @@ export class CacheService {
     fetcher: () => Promise<T>,
     projectId?: string,
   ): Promise<T> {
-    // 1. Try cache hit
-    const cached = await this.redis.client.get(key);
+    // 1. Try cache hit — if Redis is down, fall through directly to the fetcher
+    //    (X5: "Cache misses must go directly to source databases" when Redis is unavailable)
+    let cached: string | null = null;
+    try {
+      cached = await this.redis.client.get(key);
+    } catch {
+      logger.warn({ key }, 'cache: Redis GET failed (Redis down?) — fetching directly from source');
+      return fetcher();
+    }
+
     if (cached !== null) {
       if (projectId) this.incrHit(projectId);
       return JSON.parse(cached) as T;
@@ -71,20 +79,27 @@ export class CacheService {
 
     // 2. Try to acquire fill lock (stampede prevention)
     const ownerId = this.generateOwnerId();
-    const locked = await this.acquireLock(key, ownerId);
+    let locked = false;
+    try {
+      locked = await this.acquireLock(key, ownerId);
+    } catch {
+      // Redis down — fall through to direct fetch
+      logger.warn({ key }, 'cache: Redis lock failed (Redis down?) — fetching directly from source');
+      return fetcher();
+    }
 
     if (locked) {
       // We won the lock — fetch and populate
       try {
         // Double-check: another holder may have filled the cache just before
         // we acquired the lock.
-        const rechecked = await this.redis.client.get(key);
+        const rechecked = await this.redis.client.get(key).catch(() => null);
         if (rechecked !== null) {
           return JSON.parse(rechecked) as T;
         }
 
         const value = await fetcher();
-        await this.redis.client.setex(key, ttlSeconds, JSON.stringify(value));
+        await this.redis.client.setex(key, ttlSeconds, JSON.stringify(value)).catch(() => undefined);
         logger.debug({ key, ttlSeconds }, 'cache filled');
         return value;
       } finally {
@@ -97,20 +112,20 @@ export class CacheService {
     while (Date.now() < deadline) {
       await new Promise<void>((resolve) => setTimeout(resolve, this.POLL_INTERVAL_MS));
 
-      const polled = await this.redis.client.get(key);
+      const polled = await this.redis.client.get(key).catch(() => null);
       if (polled !== null) {
         return JSON.parse(polled) as T;
       }
 
       // If the lock was released but cache is still empty, try fetching directly
-      const lockExists = await this.redis.client.exists(`${this.LOCK_PREFIX}${key}`);
+      const lockExists = await this.redis.client.exists(`${this.LOCK_PREFIX}${key}`).catch(() => -1);
       if (lockExists === 0) {
         // Lock gone but no cache — try to become the new filler
-        const retryLocked = await this.acquireLock(key, ownerId);
+        const retryLocked = await this.acquireLock(key, ownerId).catch(() => false);
         if (retryLocked) {
           try {
             const value = await fetcher();
-            await this.redis.client.setex(key, ttlSeconds, JSON.stringify(value));
+            await this.redis.client.setex(key, ttlSeconds, JSON.stringify(value)).catch(() => undefined);
             return value;
           } finally {
             await this.releaseLock(key, ownerId).catch(() => undefined);

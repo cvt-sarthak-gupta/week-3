@@ -172,16 +172,17 @@ export function searchRoutes(container: AppContainer): FastifyPluginAsync {
         const esCircuitOpen = container.breakers.elasticsearch.getState() === 'open';
 
         if (cachedResult !== null) {
+          const cached = JSON.parse(cachedResult) as Record<string, unknown>;
           if (esCircuitOpen) {
-            // ES is down — spec requires 503 + Retry-After even if we have a cached result.
-            // The cache is preserved for when ES recovers.
-            logger.warn({ projectId }, 'ES down — returning 503 (Retry-After: 60)');
+            // ES is down — serve the last cached result (stale) as required by X5.
+            // "Cache the last successful search result in Redis for up to 1 hour."
+            logger.warn({ projectId }, 'ES down — serving stale cache result (X5 degradation)');
             void reply
-              .status(503)
+              .status(200)
+              .header('X-Cache', 'STALE')
               .header('Retry-After', '60')
-              .send({ error: 'Search service temporarily unavailable', retryAfter: 60 });
+              .send({ ...cached, cacheHit: true, stale: true });
           } else {
-            const cached = JSON.parse(cachedResult) as Record<string, unknown>;
             void reply
               .status(200)
               .header('X-Cache', 'HIT')
@@ -191,6 +192,7 @@ export function searchRoutes(container: AppContainer): FastifyPluginAsync {
         }
 
         if (esCircuitOpen) {
+          // No cached result available and ES is down — return 503.
           void reply
             .status(503)
             .header('Retry-After', '60')
