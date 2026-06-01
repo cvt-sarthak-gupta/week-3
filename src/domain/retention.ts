@@ -2,10 +2,6 @@ import { pool } from '../db/postgres.js';
 import { eventsCollection } from '../db/mongo.js';
 import { logger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface RetentionJobResult {
   projectsProcessed: number;
   documentsDeleted: number;
@@ -18,17 +14,9 @@ interface ProjectRetentionRow {
   retention_days: number;
 }
 
-// ---------------------------------------------------------------------------
-// sleep helper
-// ---------------------------------------------------------------------------
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-// ---------------------------------------------------------------------------
-// Delete loop for a single project
-// ---------------------------------------------------------------------------
 
 const BATCH_SIZE = 10_000;
 const BATCH_SLEEP_MS = 50;
@@ -83,10 +71,6 @@ async function deleteProjectEvents(
 
   return totalDeleted;
 }
-
-// ---------------------------------------------------------------------------
-// runRetentionJob
-// ---------------------------------------------------------------------------
 
 export async function runRetentionJob(): Promise<RetentionJobResult> {
   const startMs = Date.now();

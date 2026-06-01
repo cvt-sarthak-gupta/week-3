@@ -5,10 +5,6 @@ import { healthCheck as mongoHealthCheck } from '../db/mongo.js';
 import { healthCheck as esHealthCheck } from '../db/elastic.js';
 import { healthCheck as redisHealthCheck } from '../db/redis.js';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 interface DatastoreChecks {
   postgres: boolean;
   mongo: boolean;
@@ -27,10 +23,6 @@ interface ReadyCheck {
   latencyMs: number;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 const HEALTH_TIMEOUT_MS = 200;
 
 async function withTimeout<T>(
@@ -42,10 +34,6 @@ async function withTimeout<T>(
     new Promise<T>((resolve) => setTimeout(() => resolve(fallback), HEALTH_TIMEOUT_MS)),
   ]);
 }
-
-// ---------------------------------------------------------------------------
-// Plugin
-// ---------------------------------------------------------------------------
 
 const healthPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   fastify.get(

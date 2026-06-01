@@ -4,10 +4,6 @@ import { eventsCollection } from '../db/mongo.js';
 import { withClient } from '../db/postgres.js';
 import { logger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface ErrorIntelligenceReport {
   topErrors: Array<{
     fingerprint: string;
@@ -34,10 +30,6 @@ export interface TenantQuotaRow {
   growthRate: number | null; // null when prev_month is 0
   rank: number;
 }
-
-// ---------------------------------------------------------------------------
-// Error Intelligence Report — single $facet aggregation
-// ---------------------------------------------------------------------------
 
 export async function getErrorIntelligence(
   projectId: string,
@@ -191,10 +183,6 @@ export async function getErrorIntelligence(
     newFingerprints: facet.newFingerprints.map((r) => r.fingerprint),
   };
 }
-
-// ---------------------------------------------------------------------------
-// Tenant Quota Report — admin SQL with RANK() and MoM growth
-// ---------------------------------------------------------------------------
 
 export async function getTenantQuotaReport(): Promise<TenantQuotaRow[]> {
   return withClient(async (client) => {

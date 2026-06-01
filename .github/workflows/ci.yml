@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type check
+        run: npm run typecheck
+
+  migrations-lint:
+    name: Migration Files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify migration files exist and are numbered
+        run: |
+          count=$(ls migrations/*.sql 2>/dev/null | wc -l)
+          echo "Found $count migration files"
+          if [ "$count" -lt 1 ]; then
+            echo "ERROR: No migration files found"
+            exit 1
+          fi
+          ls -1 migrations/*.sql
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: typecheck
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start test services
+        run: docker compose -f docker-compose.test.yml up -d
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose -f docker-compose.test.yml exec -T postgres pg_isready -U postgres -d pulseboard_test; then
+              echo "PostgreSQL ready"; break
+            fi
+            echo "Waiting for PostgreSQL... ($i/30)"; sleep 5
+          done
+
+      - name: Wait for MongoDB replica set
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose -f docker-compose.test.yml exec -T mongo mongosh --eval "rs.status().ok" --quiet 2>/dev/null | grep -q "1"; then
+              echo "MongoDB replica set ready"; break
+            fi
+            echo "Waiting for MongoDB rs0... ($i/30)"; sleep 5
+          done
+
+      - name: Wait for Elasticsearch
+        run: |
+          for i in $(seq 1 40); do
+            if curl -sf http://localhost:9201/_cluster/health | grep -qE '"status":"(green|yellow)"'; then
+              echo "Elasticsearch ready"; break
+            fi
+            echo "Waiting for Elasticsearch... ($i/40)"; sleep 10
+          done
+
+      - name: Wait for Redis
+        run: |
+          for i in $(seq 1 15); do
+            if docker compose -f docker-compose.test.yml exec -T redis redis-cli ping | grep -q PONG; then
+              echo "Redis ready"; break
+            fi
+            echo "Waiting for Redis... ($i/15)"; sleep 3
+          done
+
+      - name: Run migrations
+        run: npm run migrate
+        env:
+          NODE_ENV: test
+          PG_HOST: localhost
+          PG_PORT: 5433
+          PG_DATABASE: pulseboard_test
+          PG_USER: postgres
+          PG_PASSWORD: postgres
+          MONGO_URL: mongodb://localhost:27018/?directConnection=true
+          MONGO_DB_NAME: pulseboard_test
+          ES_URL: http://localhost:9201
+          REDIS_HOST: localhost
+          REDIS_PORT: 6380
+          JWT_SECRET: test-secret-for-pulseboard-tests-ok
+          JWT_EXPIRY: 1h
+          JWT_REFRESH_EXPIRY: 7d
+
+      - name: Run integration tests
+        run: npm run test:integration
+        env:
+          NODE_ENV: test
+          PG_HOST: localhost
+          PG_PORT: 5433
+          PG_DATABASE: pulseboard_test
+          PG_USER: postgres
+          PG_PASSWORD: postgres
+          PG_POOL_MIN: 1
+          PG_POOL_MAX: 5
+          MONGO_URL: mongodb://localhost:27018/?directConnection=true
+          TEST_MONGO_URL: mongodb://localhost:27018/?directConnection=true
+          MONGO_DB_NAME: pulseboard_test
+          TEST_MONGO_DB: pulseboard_test
+          ES_URL: http://localhost:9201
+          REDIS_HOST: localhost
+          REDIS_PORT: 6380
+          JWT_SECRET: test-secret-for-pulseboard-tests-ok
+          JWT_EXPIRY: 1h
+          JWT_REFRESH_EXPIRY: 7d
+          SKIP_DOCKER_DEGRADATION: 1
+
+      - name: Stop test services
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v

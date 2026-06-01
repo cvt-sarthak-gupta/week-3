@@ -19,19 +19,11 @@ import { createMetricsRoutes } from './modules/metrics/index.js';
 import { createConsistencyRoutes } from './modules/consistency/index.js';
 import type { AppContainer } from './container.js';
 
-// ---------------------------------------------------------------------------
-// buildApp — returns a fully configured Fastify instance with all routes
-// ---------------------------------------------------------------------------
-
 export async function buildApp(container: AppContainer): Promise<FastifyInstance> {
   const app = Fastify({
     logger: false, // We use our own pino instance
     trustProxy: true,
   });
-
-  // -------------------------------------------------------------------------
-  // Plugins
-  // -------------------------------------------------------------------------
 
   await app.register(cors, {
     origin: config.node === 'production' ? false : true,
@@ -81,28 +73,18 @@ export async function buildApp(container: AppContainer): Promise<FastifyInstance
 
   await app.register(correlationPlugin);
 
-  // -------------------------------------------------------------------------
-  // Error handler
-  // -------------------------------------------------------------------------
-
   app.setErrorHandler(fastifyErrorHandler);
 
-  // -------------------------------------------------------------------------
   // Ingest at root (no /v1 prefix) — API-key authenticated hot path
-  // -------------------------------------------------------------------------
 
   await app.register(createIngestRoutes(container.ingest, container.apiKey));
 
-  // -------------------------------------------------------------------------
   // Health and metrics at root (no auth, no /v1 prefix)
-  // -------------------------------------------------------------------------
 
   await app.register(createHealthRoutes(container.health));
   await app.register(createMetricsRoutes(container.metrics));
 
-  // -------------------------------------------------------------------------
   // All v1 routes under /v1 prefix
-  // -------------------------------------------------------------------------
 
   await app.register(
     async (v1) => {

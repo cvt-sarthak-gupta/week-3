@@ -104,8 +104,8 @@ export function createTenantRoutes(tenantService: TenantService): FastifyPluginA
         const userId = request.user.userId;
 
         const data: PatchTenantInput = {
-          name: request.body.name,
-          isActive: request.body.isActive,
+          ...(request.body.name !== undefined ? { name: request.body.name } : {}),
+          ...(request.body.isActive !== undefined ? { isActive: request.body.isActive } : {}),
         };
 
         await tenantService.update(tenantId, userId, data);

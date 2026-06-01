@@ -3,17 +3,9 @@ import type { MongoDatabase } from '../../db/mongo/index.js';
 import { logger } from '../../utils/logger.js';
 import type { RetentionResult } from './retention.types.js';
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 const BATCH_SIZE = 10_000;
 const BATCH_SLEEP_MS = 50;
 const PROJECT_BUDGET_MS = 30_000; // 30-second wall-clock budget per project
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,19 +16,11 @@ interface ProjectRetentionRow {
   retention_days: number;
 }
 
-// ---------------------------------------------------------------------------
-// RetentionService
-// ---------------------------------------------------------------------------
-
 export class RetentionService {
   constructor(
     private readonly pool: PostgresPool,
     private readonly mongo: MongoDatabase,
   ) {}
-
-  // ---------------------------------------------------------------------------
-  // runRetention — batched deleteMany per project with per-project budget
-  // ---------------------------------------------------------------------------
 
   async runRetention(): Promise<RetentionResult> {
     const startMs = Date.now();
@@ -94,10 +78,6 @@ export class RetentionService {
 
     return { projectsProcessed, documentsDeleted, errors, durationMs };
   }
-
-  // ---------------------------------------------------------------------------
-  // deleteProjectEvents — batched delete loop for a single project
-  // ---------------------------------------------------------------------------
 
   private async deleteProjectEvents(projectId: string, cutoff: Date): Promise<number> {
     let totalDeleted = 0;

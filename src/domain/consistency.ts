@@ -3,10 +3,6 @@ import { eventsCollection, projectConfigsCollection } from '../db/mongo.js';
 import { esClient } from '../db/elastic.js';
 import { logger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface Inconsistency {
   kind: 'missing_mongo_config' | 'missing_es_index' | 'count_drift' | 'orphan_mongo_config';
   projectId: string;
@@ -25,10 +21,6 @@ export interface AuditResult {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Concurrency-limited batch runner
-// ---------------------------------------------------------------------------
-
 async function runConcurrent<T, R>(
   items: T[],
   concurrency: number,
@@ -42,10 +34,6 @@ async function runConcurrent<T, R>(
   }
   return results;
 }
-
-// ---------------------------------------------------------------------------
-// Per-project audit check
-// ---------------------------------------------------------------------------
 
 interface ProjectRow {
   id: string;
@@ -115,10 +103,6 @@ async function auditProject(project: ProjectRow): Promise<Inconsistency[]> {
 
   return issues;
 }
-
-// ---------------------------------------------------------------------------
-// runAudit
-// ---------------------------------------------------------------------------
 
 export async function runAudit(): Promise<AuditResult> {
   const ranAt = new Date();

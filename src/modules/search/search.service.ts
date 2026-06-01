@@ -41,10 +41,6 @@ export class SearchService {
     const { q, severity, from, to, cursor, limit = 20 } = query;
     const pageSize = Math.min(limit, 100);
 
-    // -------------------------------------------------------------------------
-    // Build the ES bool query
-    // -------------------------------------------------------------------------
-
     type EsQuery = Record<string, unknown>;
 
     const mustClauses: EsQuery[] = [];
@@ -105,10 +101,6 @@ export class SearchService {
       },
     };
 
-    // -------------------------------------------------------------------------
-    // Search-after pagination
-    // -------------------------------------------------------------------------
-
     const searchAfter = cursor !== undefined ? decodeCursor(cursor) : undefined;
     const alias = this.es.aliasName(projectId);
     const cacheKey = `search:${projectId}:${Buffer.from(
@@ -122,7 +114,7 @@ export class SearchService {
     if (cachedResult !== null) {
       const cached = JSON.parse(cachedResult) as unknown as SearchResult;
       if (esCircuitOpen) {
-        logger.warn({ projectId }, 'ES down — serving stale cached search result (X5)');
+        logger.warn({ projectId }, 'ES down — serving stale cached search result');
         return {
           result: { ...cached, cacheHit: true, stale: true },
           status: 206,

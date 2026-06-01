@@ -5,10 +5,6 @@ import { Redis } from 'ioredis';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
-// Singleton client
-// ---------------------------------------------------------------------------
-
 export const redis = new Redis({
   host: config.redis.host,
   port: config.redis.port,
@@ -28,10 +24,6 @@ redis.on('error', (err: Error) => {
 redis.on('reconnecting', () => {
   logger.warn('Redis client reconnecting…');
 });
-
-// ---------------------------------------------------------------------------
-// Lifecycle helpers
-// ---------------------------------------------------------------------------
 
 export async function connect(): Promise<void> {
   await redis.connect();
@@ -53,10 +45,6 @@ export async function healthCheck(): Promise<{ ok: boolean; latencyMs: number }>
     return { ok: false, latencyMs: Date.now() - start };
   }
 }
-
-// ---------------------------------------------------------------------------
-// Lua script loader
-// ---------------------------------------------------------------------------
 
 // Resolve the lua directory relative to this source file so the path is stable
 // regardless of cwd.
@@ -112,10 +100,6 @@ export async function loadLua(name: string): Promise<LuaScript> {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Stream constants
-// ---------------------------------------------------------------------------
-
 export const STREAM_KEY = 'events-stream';
 export const STREAM_DLQ = 'events-stream-dlq';
 export const CONSUMER_GROUP = 'ingesters';
@@ -137,10 +121,6 @@ export async function ensureConsumerGroup(): Promise<void> {
     throw err;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Metrics helpers
-// ---------------------------------------------------------------------------
 
 /**
  * Atomically increments a Redis counter by `amount` (default 1).

@@ -5,10 +5,6 @@ import { esClient, percolatorIndex } from '../db/elastic.js';
 import { authenticateUser } from '../lib/auth.js';
 import { ForbiddenError, NotFoundError } from '../errors.js';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 interface AlertRuleRow {
   id: string;
   project_id: string;
@@ -43,10 +39,6 @@ interface MemberRow {
   role: string;
 }
 
-// ---------------------------------------------------------------------------
-// Membership guard
-// ---------------------------------------------------------------------------
-
 async function assertMember(userId: string, tenantId: string): Promise<MemberRow> {
   const result = await pool.query<MemberRow>(
     'SELECT user_id, role FROM tenant_members WHERE tenant_id = $1 AND user_id = $2 LIMIT 1',
@@ -68,10 +60,6 @@ async function assertProjectBelongsToTenant(projectId: string, tenantId: string)
     throw new NotFoundError('Project not found');
   }
 }
-
-// ---------------------------------------------------------------------------
-// Plugin
-// ---------------------------------------------------------------------------
 
 const alertPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   fastify.get<{ Params: ProjectParams }>(

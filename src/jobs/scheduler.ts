@@ -3,10 +3,6 @@ import type { MongoDatabase } from '../db/mongo/index.js';
 import type { ElasticClient } from '../db/elastic/index.js';
 import { logger } from '../utils/logger.js';
 
-// ---------------------------------------------------------------------------
-// Job implementations (delegate to existing job modules)
-// ---------------------------------------------------------------------------
-
 /**
  * The job functions themselves use module-level singletons from the old
  * db layer. The JobScheduler owns the schedule wiring; the actual job logic
@@ -14,10 +10,6 @@ import { logger } from '../utils/logger.js';
  * receive injected dependencies via closures so they can be easily replaced
  * once the jobs are refactored to accept constructor params.
  */
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /** Wraps a job function so errors are logged without crashing the scheduler. */
 function safeRun(name: string, fn: () => Promise<void>): () => void {
@@ -52,10 +44,6 @@ function msUntilNextUtc(targetHour: number, targetMinute: number): number {
   return next.getTime() - now.getTime();
 }
 
-// ---------------------------------------------------------------------------
-// JobScheduler
-// ---------------------------------------------------------------------------
-
 export class JobScheduler {
   private readonly timers: Array<ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>> = [];
 
@@ -77,9 +65,6 @@ export class JobScheduler {
   start(): void {
     const DAY_MS = 24 * 60 * 60 * 1_000;
 
-    // -------------------------------------------------------------------------
-    // 1. Retention job — daily at 02:00 UTC
-    // -------------------------------------------------------------------------
     const retentionRunner = safeRun('retentionJob', () => this.runRetention());
 
     // Run immediately on startup
@@ -100,9 +85,6 @@ export class JobScheduler {
       }, msUntilRetention),
     );
 
-    // -------------------------------------------------------------------------
-    // 2. PG partition creation job — daily at 00:05 UTC
-    // -------------------------------------------------------------------------
     const partitionsRunner = safeRun('ensurePartitionsJob', () => this.runEnsurePartitions());
 
     // Run immediately on startup so partitions exist from the start
@@ -123,9 +105,6 @@ export class JobScheduler {
       }, msUntilPartitions),
     );
 
-    // -------------------------------------------------------------------------
-    // 3. ILM apply job — daily at 01:00 UTC
-    // -------------------------------------------------------------------------
     const ilmRunner = safeRun('applyIlmJob', () => this.runApplyIlm());
 
     // Run once immediately to reconcile on startup
@@ -159,10 +138,8 @@ export class JobScheduler {
     logger.info('JobScheduler: all timers cleared');
   }
 
-  // ---------------------------------------------------------------------------
   // Job implementations — use injected DB clients directly so the new
   // modular jobs don't rely on module-level singletons.
-  // ---------------------------------------------------------------------------
 
   private async runRetention(): Promise<void> {
     logger.info('Retention job starting');

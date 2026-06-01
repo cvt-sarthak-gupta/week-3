@@ -5,10 +5,6 @@ import { authenticateUser } from '../lib/auth.js';
 import { runAudit } from '../domain/consistency.js';
 import { ForbiddenError } from '../errors.js';
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 async function assertAdmin(userId: string): Promise<void> {
   const result = await pool.query<{ role: string }>(
     `SELECT role FROM users WHERE id = $1 AND role = 'admin' LIMIT 1`,
@@ -18,10 +14,6 @@ async function assertAdmin(userId: string): Promise<void> {
     throw new ForbiddenError('Admin access required');
   }
 }
-
-// ---------------------------------------------------------------------------
-// Plugin
-// ---------------------------------------------------------------------------
 
 const consistencyPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   fastify.get(

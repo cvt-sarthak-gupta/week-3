@@ -1,10 +1,6 @@
 import type { RedisClient } from '../../db/redis/index.js';
 import type { CircuitBreakers } from '../../lib/circuit-breaker/index.js';
 
-// ---------------------------------------------------------------------------
-// Metric key inventory (matches the original route)
-// ---------------------------------------------------------------------------
-
 const METRIC_KEYS = [
   'metrics:events:ingested:total',
   'metrics:events:ingested:errors',
@@ -24,10 +20,6 @@ const METRIC_KEYS = [
 
 type MetricKey = (typeof METRIC_KEYS)[number];
 
-// ---------------------------------------------------------------------------
-// MetricsResult
-// ---------------------------------------------------------------------------
-
 export interface MetricsResult {
   counters: Record<string, number>;
   stream: {
@@ -43,10 +35,6 @@ export interface MetricsResult {
   alertFanoutFailures: number;
   collectedAt: string;
 }
-
-// ---------------------------------------------------------------------------
-// MetricsService
-// ---------------------------------------------------------------------------
 
 export class MetricsService {
   constructor(

@@ -1,7 +1,3 @@
-// ---------------------------------------------------------------------------
-// Leaderboard module types
-// ---------------------------------------------------------------------------
-
 export interface LeaderboardEntry {
   projectId: string;
   projectName: string;

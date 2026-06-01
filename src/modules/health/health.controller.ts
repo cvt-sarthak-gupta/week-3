@@ -2,16 +2,10 @@ import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { HealthService } from './health.service.js';
 
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
-
 export function createHealthRoutes(healthService: HealthService): FastifyPluginAsync {
   return fp(
     async (fastify: FastifyInstance) => {
-      // -----------------------------------------------------------------------
       // GET /health — liveness probe (no dependency checks, always fast)
-      // -----------------------------------------------------------------------
 
       fastify.get(
         '/health',
@@ -21,9 +15,7 @@ export function createHealthRoutes(healthService: HealthService): FastifyPluginA
         },
       );
 
-      // -----------------------------------------------------------------------
       // GET /ready — readiness probe (checks all datastores concurrently)
-      // -----------------------------------------------------------------------
 
       fastify.get(
         '/ready',

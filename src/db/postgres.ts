@@ -2,10 +2,6 @@ import pg from 'pg';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
-// Pool creation
-// ---------------------------------------------------------------------------
-
 const poolConfig: pg.PoolConfig = {
   host: config.pg.host,
   port: config.pg.port,
@@ -31,10 +27,6 @@ pool.on('connect', () => {
 pool.on('error', (err: Error) => {
   logger.error({ err }, 'pg pool: idle client error');
 });
-
-// ---------------------------------------------------------------------------
-// Tenant-scoped transaction helper
-// ---------------------------------------------------------------------------
 
 /**
  * Checks out a client, begins a transaction, sets the RLS tenant context via
@@ -63,9 +55,7 @@ export async function withTenant<T>(
   }
 }
 
-// ---------------------------------------------------------------------------
 // Admin / migration helper (no RLS context)
-// ---------------------------------------------------------------------------
 
 /**
  * Checks out a client and runs `fn` inside a transaction without setting any
@@ -88,10 +78,6 @@ export async function withClient<T>(
   }
 }
 
-// ---------------------------------------------------------------------------
-// One-shot query helper
-// ---------------------------------------------------------------------------
-
 /**
  * Runs a single query on a transient pooled client (no explicit transaction).
  */
@@ -101,10 +87,6 @@ export async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
 ): Promise<pg.QueryResult<T>> {
   return pool.query<T>(sql, params);
 }
-
-// ---------------------------------------------------------------------------
-// Lifecycle helpers
-// ---------------------------------------------------------------------------
 
 export async function close(): Promise<void> {
   await pool.end();

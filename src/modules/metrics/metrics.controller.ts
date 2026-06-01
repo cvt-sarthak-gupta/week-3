@@ -2,16 +2,10 @@ import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { MetricsService } from './metrics.service.js';
 
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
-
 export function createMetricsRoutes(metricsService: MetricsService): FastifyPluginAsync {
   return fp(
     async (fastify: FastifyInstance) => {
-      // -----------------------------------------------------------------------
       // GET /metrics — no auth (firewall-restricted endpoint)
-      // -----------------------------------------------------------------------
 
       fastify.get(
         '/metrics',

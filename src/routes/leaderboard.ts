@@ -5,15 +5,7 @@ import { redis } from '../db/redis.js';
 import { authenticateUser } from '../lib/auth.js';
 import { ForbiddenError } from '../errors.js';
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 const LEADERBOARD_TOP_N = 20;
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 interface TenantParams {
   tenantId: string;
@@ -35,10 +27,6 @@ interface LeaderboardEntry {
   rank: number;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 async function assertMember(userId: string, tenantId: string): Promise<void> {
   const result = await pool.query<MemberRow>(
     'SELECT user_id FROM tenant_members WHERE tenant_id = $1 AND user_id = $2 LIMIT 1',
@@ -56,10 +44,6 @@ function todayKey(): string {
   const dd = now.getUTCDate().toString().padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
-
-// ---------------------------------------------------------------------------
-// Plugin
-// ---------------------------------------------------------------------------
 
 const leaderboardPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   fastify.get<{ Params: TenantParams }>(

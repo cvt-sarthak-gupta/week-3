@@ -3,10 +3,6 @@ import type { MongoDatabase } from '../../db/mongo/index.js';
 import type { ElasticClient } from '../../db/elastic/index.js';
 import type { RedisClient } from '../../db/redis/index.js';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface DatastoreChecks {
   postgres: boolean;
   mongo: boolean;
@@ -20,15 +16,7 @@ export interface HealthResult {
   timestamp: string;
 }
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 const HEALTH_TIMEOUT_MS = 200;
-
-// ---------------------------------------------------------------------------
-// HealthService
-// ---------------------------------------------------------------------------
 
 export class HealthService {
   constructor(

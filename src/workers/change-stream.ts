@@ -3,10 +3,6 @@ import { redis } from '../db/redis.js';
 import { eventsCollection } from '../db/mongo.js';
 import { createWorkerLogger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 const LEADER_KEY = 'change-stream:fatal:leader';
 const RESUME_HASH_KEY = 'change-stream:fatal:resume';
 const LEADER_TTL_MS = 30_000;
@@ -14,10 +10,6 @@ const LEADER_POLL_MS = 5_000;
 const LEADER_RENEW_MS = 10_000;
 
 const log = createWorkerLogger('change-stream');
-
-// ---------------------------------------------------------------------------
-// runChangeStreamWorker
-// ---------------------------------------------------------------------------
 
 export async function runChangeStreamWorker(): Promise<void> {
   const nodeId = process.env['HOSTNAME'] ?? nanoid(8);
@@ -43,9 +35,6 @@ export async function runChangeStreamWorker(): Promise<void> {
     }
   });
 
-  // -----------------------------------------------------------------------
-  // Leader election + watch loop
-  // -----------------------------------------------------------------------
   while (running) {
     // Try to acquire the leader lock
     const acquired = await redis
@@ -107,10 +96,6 @@ export async function runChangeStreamWorker(): Promise<void> {
 
   log.info('Change stream worker stopped');
 }
-
-// ---------------------------------------------------------------------------
-// watchFatalEvents — opens and drains the change stream
-// ---------------------------------------------------------------------------
 
 async function watchFatalEvents(
   nodeId: string,

@@ -1,3 +1,4 @@
+import { CircuitBreaker } from './circuit-breaker.js';
 export { CircuitBreaker } from './circuit-breaker.js';
 export type { BreakerState, BreakerConfig, BreakerMetrics } from './types.js';
 

@@ -15,10 +15,6 @@ import { config } from '../config.js';
 import { AuthError } from '../errors.js';
 import { logger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface UserTokenPayload {
   userId: string;
   tenantId: string;
@@ -38,10 +34,6 @@ declare module 'fastify' {
     project?: ProjectContext;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Token signing
-// ---------------------------------------------------------------------------
 
 export interface SignedTokens {
   accessToken: string;
@@ -65,10 +57,6 @@ export async function signTokens(
   return { accessToken, refreshToken };
 }
 
-// ---------------------------------------------------------------------------
-// API key extraction
-// ---------------------------------------------------------------------------
-
 const API_KEY_HEADER = 'x-pulseboard-key';
 
 export function extractApiKey(request: FastifyRequest): string | null {
@@ -78,10 +66,6 @@ export function extractApiKey(request: FastifyRequest): string | null {
   }
   return null;
 }
-
-// ---------------------------------------------------------------------------
-// JWT preHandler hook
-// ---------------------------------------------------------------------------
 
 export async function authenticateUser(
   request: FastifyRequest,
@@ -105,10 +89,6 @@ export async function authenticateUser(
     throw new AuthError('Malformed token payload');
   }
 }
-
-// ---------------------------------------------------------------------------
-// API key preHandler hook factory
-// ---------------------------------------------------------------------------
 
 interface PgProjectRow {
   id: string;

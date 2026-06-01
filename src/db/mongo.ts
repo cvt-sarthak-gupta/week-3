@@ -2,10 +2,6 @@ import { MongoClient, ServerApiVersion, type Db, type Collection } from 'mongodb
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
-// Document interfaces
-// ---------------------------------------------------------------------------
-
 export interface StackFrame {
   file?: string;
   line?: number;
@@ -71,10 +67,6 @@ export interface PipelineMetricsDocument {
   meta?: Record<string, unknown>;
 }
 
-// ---------------------------------------------------------------------------
-// Singleton client
-// ---------------------------------------------------------------------------
-
 let _client: MongoClient | null = null;
 
 /**
@@ -87,10 +79,6 @@ export function getClient(): MongoClient {
   }
   return _client;
 }
-
-// ---------------------------------------------------------------------------
-// Connection with retry
-// ---------------------------------------------------------------------------
 
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 2_000;
@@ -151,17 +139,9 @@ export async function connect(): Promise<void> {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Database accessor
-// ---------------------------------------------------------------------------
-
 export function getDb(): Db {
   return getClient().db(config.mongo.dbName);
 }
-
-// ---------------------------------------------------------------------------
-// Typed collection accessors
-// ---------------------------------------------------------------------------
 
 /** Raw ingested events (errors, logs, metrics, custom). */
 export function eventsCollection(): Collection<EventDocument> {
@@ -189,9 +169,16 @@ export function pipelineMetricsCollection(): Collection<PipelineMetricsDocument>
   return getDb().collection<PipelineMetricsDocument>('pipeline_metrics');
 }
 
-// ---------------------------------------------------------------------------
-// Lifecycle helpers
-// ---------------------------------------------------------------------------
+export function rateLimitViolationsCollection(): Collection<{
+  _id?: unknown;
+  apiKeyTail: string;
+  projectId: string;
+  tenantId: string;
+  violatedAt: Date;
+  resetAt: Date;
+}> {
+  return getDb().collection('rate_limit_violations');
+}
 
 export async function healthCheck(): Promise<{ ok: boolean; latencyMs: number }> {
   const start = Date.now();

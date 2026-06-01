@@ -5,10 +5,6 @@ import { ForbiddenError } from '../../utils/errors.js';
 import type { PostgresPool } from '../../db/postgres/index.js';
 import type { LeaderboardService } from './leaderboard.service.js';
 
-// ---------------------------------------------------------------------------
-// Route param interfaces
-// ---------------------------------------------------------------------------
-
 interface TenantParams {
   tenantId: string;
 }
@@ -16,10 +12,6 @@ interface TenantParams {
 interface MemberRow {
   user_id: string;
 }
-
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
 
 export function createLeaderboardRoutes(
   leaderboardService: LeaderboardService,
@@ -37,9 +29,7 @@ export function createLeaderboardRoutes(
         }
       }
 
-      // -----------------------------------------------------------------------
       // GET /tenants/:tenantId/leaderboard
-      // -----------------------------------------------------------------------
 
       fastify.get<{ Params: TenantParams }>(
         '/tenants/:tenantId/leaderboard',

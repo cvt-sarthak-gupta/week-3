@@ -1,4 +1,3 @@
-// Cache-aside pattern with Redis
 // - On miss: one holder gets the lock, runs the fetcher, caches result
 // - Others poll briefly waiting for the result
 // - Invalidation: SCAN + UNLINK (never KEYS)
@@ -14,10 +13,6 @@ export class CacheService {
   private static readonly POLL_TIMEOUT_MS = 5_000;
 
   constructor(private readonly redisClient: RedisClient) {}
-
-  // ---------------------------------------------------------------------------
-  // getOrFill — cache-aside with stampede prevention
-  // ---------------------------------------------------------------------------
 
   async getOrFill<T>(
     key: string,
@@ -96,10 +91,6 @@ export class CacheService {
     return fetcher();
   }
 
-  // ---------------------------------------------------------------------------
-  // invalidatePattern — SCAN + pipelined UNLINK
-  // ---------------------------------------------------------------------------
-
   async invalidatePattern(pattern: string): Promise<number> {
     let cursor = '0';
     const keysToDelete: string[] = [];
@@ -135,18 +126,10 @@ export class CacheService {
     return keysToDelete.length;
   }
 
-  // ---------------------------------------------------------------------------
-  // invalidateProject — convenience wrapper
-  // ---------------------------------------------------------------------------
-
   async invalidateProject(projectId: string): Promise<void> {
     const count = await this.invalidatePattern(`report:${projectId}:*`);
     logger.info({ projectId, deleted: count }, 'project cache invalidated');
   }
-
-  // ---------------------------------------------------------------------------
-  // Private helpers
-  // ---------------------------------------------------------------------------
 
   private async acquireLock(key: string, ownerId: string): Promise<boolean> {
     // ioredis overload: set(key, value, expiryMode, time, setMode)

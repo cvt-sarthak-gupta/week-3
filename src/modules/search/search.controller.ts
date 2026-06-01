@@ -6,10 +6,6 @@ import type { PostgresPool } from '../../db/postgres/index.js';
 import type { SearchService } from './search.service.js';
 import type { SearchQuerystring } from './search.types.js';
 
-// ---------------------------------------------------------------------------
-// Route param interfaces
-// ---------------------------------------------------------------------------
-
 interface ProjectSearchParams {
   tenantId: string;
   projectId: string;
@@ -21,21 +17,15 @@ interface MemberRow {
 
 const MEMBER_CACHE_TTL_SECONDS = 300;
 
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
-
 export function createSearchRoutes(
   searchService: SearchService,
   pool: PostgresPool,
 ): FastifyPluginAsync {
   return fp(
     async (fastify: FastifyInstance) => {
-      // -----------------------------------------------------------------------
       // Membership guard with inline Redis cache (via searchService's redis)
       // We accept pool here and do a plain PG check (no Redis dependency at
       // controller level — service owns its redis).
-      // -----------------------------------------------------------------------
 
       async function assertMember(userId: string, tenantId: string): Promise<void> {
         const result = await pool.query<MemberRow>(
@@ -47,9 +37,7 @@ export function createSearchRoutes(
         }
       }
 
-      // -----------------------------------------------------------------------
       // GET /tenants/:tenantId/projects/:projectId/logs/search
-      // -----------------------------------------------------------------------
 
       fastify.get<{ Params: ProjectSearchParams; Querystring: SearchQuerystring }>(
         '/tenants/:tenantId/projects/:projectId/logs/search',

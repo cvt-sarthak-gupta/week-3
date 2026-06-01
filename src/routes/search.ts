@@ -8,10 +8,6 @@ import { ForbiddenError, ValidationError } from '../errors.js';
 import { logger } from '../logger.js';
 import { breakers } from '../lib/circuit-breaker.js';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 interface ProjectSearchParams {
   tenantId: string;
   projectId: string;
@@ -37,10 +33,6 @@ interface EsHit {
   sort?: unknown[];
 }
 
-// ---------------------------------------------------------------------------
-// Membership guard
-// ---------------------------------------------------------------------------
-
 const MEMBER_CACHE_TTL_SECONDS = 300;
 
 async function assertMember(userId: string, tenantId: string): Promise<void> {
@@ -59,9 +51,7 @@ async function assertMember(userId: string, tenantId: string): Promise<void> {
   void redis.set(cacheKey, '1', 'EX', MEMBER_CACHE_TTL_SECONDS).catch(() => {});
 }
 
-// ---------------------------------------------------------------------------
 // Cursor encode / decode (base64 JSON)
-// ---------------------------------------------------------------------------
 
 function encodeCursor(sortValues: unknown[]): string {
   return Buffer.from(JSON.stringify(sortValues)).toString('base64');
@@ -74,10 +64,6 @@ function decodeCursor(cursor: string): unknown[] {
     throw new ValidationError('Invalid cursor token');
   }
 }
-
-// ---------------------------------------------------------------------------
-// Plugin
-// ---------------------------------------------------------------------------
 
 const searchPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   fastify.get<{ Params: ProjectSearchParams; Querystring: SearchQuerystring }>(
@@ -114,10 +100,6 @@ const searchPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance)
 
       const { q, severity, from, to, cursor, limit = 20 } = request.query;
       const pageSize = Math.min(limit, 100);
-
-      // -----------------------------------------------------------------------
-      // Build the ES bool query
-      // -----------------------------------------------------------------------
 
       type EsQuery = Record<string, unknown>;
 
@@ -181,23 +163,19 @@ const searchPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance)
         },
       };
 
-      // -----------------------------------------------------------------------
-      // Search-after pagination
-      // -----------------------------------------------------------------------
-
       const searchAfter = cursor !== undefined ? decodeCursor(cursor) : undefined;
 
       const alias = aliasName(projectId);
       const searchCacheKey = `search:${projectId}:${Buffer.from(JSON.stringify({ q, severity, from, to, cursor, pageSize })).toString('base64')}`;
 
-      // Check cache first — serves fresh hits on the normal path and stale hits (X5) when ES is down
+      // Check cache first — serves fresh hits on the normal path and stale hits when ES is down
       const cachedResult = await redis.get(searchCacheKey).catch(() => null);
       const esCircuitOpen = breakers.elasticsearch.getState() === 'open';
 
       if (cachedResult !== null) {
         const cached = JSON.parse(cachedResult) as Record<string, unknown>;
         if (esCircuitOpen) {
-          logger.warn({ projectId }, 'ES down — serving stale cached search result (X5)');
+          logger.warn({ projectId }, 'ES down — serving stale cached search result');
           void reply
             .status(206)
             .header('X-Cache', 'STALE')

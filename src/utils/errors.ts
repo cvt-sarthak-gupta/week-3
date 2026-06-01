@@ -1,10 +1,6 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
 import { logger } from './logger.js';
 
-// ---------------------------------------------------------------------------
-// Base
-// ---------------------------------------------------------------------------
-
 export class AppError extends Error {
   public readonly statusCode: number;
   public readonly code: string;
@@ -28,19 +24,11 @@ export class AppError extends Error {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 400
-// ---------------------------------------------------------------------------
-
 export class ValidationError extends AppError {
   constructor(message: string, details?: unknown) {
     super(message, 400, 'VALIDATION_ERROR', details);
   }
 }
-
-// ---------------------------------------------------------------------------
-// 404
-// ---------------------------------------------------------------------------
 
 export class NotFoundError extends AppError {
   constructor(message: string, details?: unknown) {
@@ -48,29 +36,17 @@ export class NotFoundError extends AppError {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 401
-// ---------------------------------------------------------------------------
-
 export class AuthError extends AppError {
   constructor(message: string, details?: unknown) {
     super(message, 401, 'UNAUTHORIZED', details);
   }
 }
 
-// ---------------------------------------------------------------------------
-// 403
-// ---------------------------------------------------------------------------
-
 export class ForbiddenError extends AppError {
   constructor(message: string, details?: unknown) {
     super(message, 403, 'FORBIDDEN', details);
   }
 }
-
-// ---------------------------------------------------------------------------
-// 429
-// ---------------------------------------------------------------------------
 
 export class RateLimitError extends AppError {
   public readonly retryAfter: number;
@@ -81,19 +57,11 @@ export class RateLimitError extends AppError {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 409
-// ---------------------------------------------------------------------------
-
 export class ConflictError extends AppError {
   constructor(message: string, details?: unknown) {
     super(message, 409, 'CONFLICT', details);
   }
 }
-
-// ---------------------------------------------------------------------------
-// 502
-// ---------------------------------------------------------------------------
 
 export class UpstreamError extends AppError {
   public readonly upstream: string;
@@ -103,10 +71,6 @@ export class UpstreamError extends AppError {
     this.upstream = upstream;
   }
 }
-
-// ---------------------------------------------------------------------------
-// 503
-// ---------------------------------------------------------------------------
 
 export class ServiceUnavailableError extends AppError {
   public readonly retryAfter?: number;
@@ -118,10 +82,6 @@ export class ServiceUnavailableError extends AppError {
     }
   }
 }
-
-// ---------------------------------------------------------------------------
-// Fastify error handler
-// ---------------------------------------------------------------------------
 
 interface ErrorResponseBody {
   error: string;

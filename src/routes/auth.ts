@@ -6,10 +6,6 @@ import { pool } from '../db/postgres.js';
 import { signTokens } from '../lib/auth.js';
 import { AuthError, ConflictError, ValidationError } from '../errors.js';
 
-// ---------------------------------------------------------------------------
-// Crypto helpers
-// ---------------------------------------------------------------------------
-
 const scryptAsync = promisify(scrypt);
 const SCRYPT_KEY_LEN = 64;
 
@@ -28,10 +24,6 @@ async function verifyPassword(password: string, stored: string): Promise<boolean
   return timingSafeEqual(derivedKey, storedBuffer);
 }
 
-// ---------------------------------------------------------------------------
-// DB row types
-// ---------------------------------------------------------------------------
-
 interface UserRow {
   id: string;
   email: string;
@@ -40,10 +32,6 @@ interface UserRow {
   tenant_id: string | null;
   role: string;
 }
-
-// ---------------------------------------------------------------------------
-// Request body types
-// ---------------------------------------------------------------------------
 
 interface RegisterBody {
   email: string;
@@ -59,10 +47,6 @@ interface LoginBody {
 interface RefreshBody {
   refreshToken: string;
 }
-
-// ---------------------------------------------------------------------------
-// Plugin
-// ---------------------------------------------------------------------------
 
 const authPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   fastify.post(

@@ -1,4 +1,3 @@
-// Cache-aside pattern with Redis
 // - On miss: one holder gets the lock, runs the fetcher, caches result
 // - Others poll briefly waiting for the result
 // - Invalidation: SCAN + UNLINK (never KEYS)
@@ -6,10 +5,6 @@
 
 import { redis, incrCounter } from '../db/redis.js';
 import { logger } from '../logger.js';
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
 
 const LOCK_PREFIX = 'cache-lock:';
 const LOCK_TTL_SECONDS = 10;
@@ -43,10 +38,6 @@ async function releaseLock(key: string, ownerId: string): Promise<void> {
 function generateOwnerId(): string {
   return `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
-
-// ---------------------------------------------------------------------------
-// getOrFill — cache-aside with stampede prevention
-// ---------------------------------------------------------------------------
 
 export async function getOrFill<T>(
   key: string,
@@ -125,10 +116,6 @@ export async function getOrFill<T>(
   return fetcher();
 }
 
-// ---------------------------------------------------------------------------
-// invalidatePattern — SCAN + pipelined UNLINK
-// ---------------------------------------------------------------------------
-
 export async function invalidatePattern(pattern: string): Promise<number> {
   let cursor = '0';
   const keysToDelete: string[] = [];
@@ -163,10 +150,6 @@ export async function invalidatePattern(pattern: string): Promise<number> {
   logger.debug({ pattern, deleted: keysToDelete.length }, 'cache invalidated by pattern');
   return keysToDelete.length;
 }
-
-// ---------------------------------------------------------------------------
-// invalidateProject — convenience wrapper
-// ---------------------------------------------------------------------------
 
 export async function invalidateProject(projectId: string): Promise<void> {
   const count = await invalidatePattern(`report:${projectId}:*`);

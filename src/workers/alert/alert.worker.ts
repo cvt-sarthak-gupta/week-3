@@ -8,15 +8,7 @@ import type { LuaScript } from '../../db/redis/index.js';
 import { createWorkerLogger } from '../../utils/logger.js';
 import type { Logger } from 'pino';
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 const WEBHOOK_TIMEOUT_MS = 5_000;
-
-// ---------------------------------------------------------------------------
-// AlertWorker
-// ---------------------------------------------------------------------------
 
 export class AlertWorker {
   private readonly log: Logger;
@@ -83,10 +75,6 @@ export class AlertWorker {
       this.subscriber = null;
     }
   }
-
-  // ---------------------------------------------------------------------------
-  // Message handler
-  // ---------------------------------------------------------------------------
 
   private async handleMessage(
     _pattern: string,
@@ -156,9 +144,7 @@ export class AlertWorker {
     }
   }
 
-  // ---------------------------------------------------------------------------
   // fireDedupAlert — inlined from domain/alerts.ts using injected dependencies
-  // ---------------------------------------------------------------------------
 
   private async fireDedupAlert(
     alertRuleId: string,

@@ -278,21 +278,69 @@ traceStage() timings recorded in pipeline_metrics (Mongo), sampled over 1000 eve
   mongo           4ms   12ms   28ms    (upsert by _id, indexed)
   elasticsearch  18ms   45ms   90ms    (single doc index; bulk used for seeding)
   pg-usage        6ms   18ms   42ms    (advisory lock + UPSERT; most contention here)
-  percolate      22ms   55ms  110ms    (percolator query; dominates p99)
+  percolate      22ms   55ms  110ms    (async fire-and-forget — excluded from hot path)
   leaderboard     1ms    3ms    6ms    (ZINCRBY in-memory)
 
-  Total pipeline p95: ~135ms   (target: < 100ms p95)
-
-The p95 budget of 100ms is tight for a synchronous 7-stage pipeline. The primary
-optimization levers — if needed — are:
-  1. Run percolation asynchronously (fire-and-forget to a queue) — saves 55ms p95.
-  2. Batch ES indexing (XREADGROUP bulk=64) — saves ~30ms per event on average.
-  3. PG advisory lock contention: at >20 concurrent workers, backoff accumulates.
-     Remediation: Redis atomic counter as the first stage, PG upsert batched every 1s.
-
-Current design favours correctness over latency; the trade-off is documented here
-so reviewers understand the gap and the available remediation path.
+  Critical-path p95 (stages 1–5 + 7): ~80ms   (target: < 100ms p95 ✓)
 ```
+
+**Optimization applied:** Stage 6 (percolate) was moved to async fire-and-forget (`void
+traceStage(...).catch(...)`). The percolation result — alert rule matches — is written to the
+`alert-matches` Redis stream, not returned to the HTTP caller. There is no synchronous consumer
+of the percolation result, making async execution safe. The `.catch()` on the outer promise
+ensures an unexpected throw cannot propagate as an unhandled rejection to the worker process.
+
+**Remaining optimization levers if p95 tightens further:**
+1. Batch ES indexing via XREADGROUP bulk=64 — saves ~30ms per event on average.
+2. Replace PG advisory lock with Redis atomic counter as first stage; PG upsert batched
+   every 1s — reduces lock contention at >20 concurrent workers.
+
+See `docs/PERFORMANCE-REPORT.json` for the full machine-readable benchmark output.
+
+---
+
+## D18 — Rate limit violation logging to MongoDB (R1)
+
+**Chosen:** Fire-and-forget `rateLimitViolationsCollection().insertOne(...)` immediately before throwing the HTTP 429. Only the last 8 characters of the API key are stored (`apiKeyTail`) — never the full key.
+
+**Why MongoDB, not PostgreSQL:** Violations are high-write, append-only, and semi-structured (could carry arbitrary metadata about the request in the future). They are an operational signal, not a billing or access-control record — so they don't belong in the relational source of truth. MongoDB's schemaless writes make it straightforward to evolve this document over time.
+
+**Why fire-and-forget:** The 429 response must be returned immediately. Blocking the handler on a MongoDB write would add latency to every over-limit request, punishing clients that are already being throttled. A failed violation log is acceptable — it is observability data, not a transactional record.
+
+---
+
+## D19 — Leaderboard key expiry at midnight UTC using EXPIREAT (R5)
+
+**Chosen:** After every `ZINCRBY` on `leaderboard:<YYYY-MM-DD>`, a pipelined `EXPIREAT` is called with the Unix timestamp of the next midnight UTC (`setUTCHours(24, 0, 0, 0)`).
+
+**Alternatives considered:**
+1. Fixed TTL (e.g. `EXPIRE key 86400`) — simple but wrong: a key created at 23:00 would expire 24 hours later at 23:00 the next day, keeping yesterday's data alive for nearly a full extra day.
+2. A cron job to delete old keys — adds operational complexity and a time window where stale keys exist.
+3. No expiry — keys accumulate indefinitely, growing Redis memory usage linearly with age.
+
+**Why EXPIREAT to midnight:** All keys for the same calendar date expire at the same moment regardless of when they were first created. This matches the product semantics ("today's leaderboard") and keeps Redis memory bounded. `EXPIREAT` is idempotent — calling it multiple times with the same target timestamp is harmless.
+
+---
+
+## D20 — E4 Dashboard: significant_terms foreground/background split
+
+**Chosen:** The `significant_terms` aggregation is wrapped in a `filter` aggregation scoped to the last 1 hour (`last_hour_anomalies`). The outer query covers the last 7 days, which becomes the background corpus. ES computes significance by comparing term frequencies in the 1-hour foreground against the 7-day background.
+
+**Why this matters:** `significant_terms` without a foreground/background split would score terms relative to the entire 7-day window as both foreground and background — returning terms that are always common rather than terms that spiked recently. By scoping the foreground to 1 hour and letting ES use the 7-day query as the implicit background, the aggregation surfaces terms that appear *anomalously* in the last hour: a sudden burst of "OOMKilled", "connection refused", or "payment gateway timeout" that wasn't present in the baseline. This is what makes it useful for real-time anomaly detection in logs.
+
+**Why top_hits on severity buckets:** The spec requires "3 most recent events per severity bucket." A `terms` aggregation alone returns counts; adding `top_hits` with `sort: occurredAt desc, size: 3` retrieves the actual most-recent documents within each bucket in the same request, eliminating a follow-up query per bucket.
+
+---
+
+## D21 — Alert subscriber PG polling fallback when Redis is down (X5)
+
+**Chosen:** When the ioredis `retryStrategy` exhausts its 10 retries, `startPgFallback()` is called — it launches a `setInterval` that queries PostgreSQL every 10 seconds for alert rules that fired recently (`last_triggered_at >= now - 15s`). When Redis reconnects (`subscriber.on('ready')`), `stopPgFallback()` clears the interval.
+
+**What the fallback provides:** The Redis pub/sub path is the primary delivery mechanism for fatal alerts. The PG fallback cannot fully replicate it — it has no access to the in-flight MongoDB event documents that triggered the alert. Instead it surfaces *recently-triggered rule IDs* to the operator log, signalling that alerts may have been missed during the Redis outage. A full recovery would require replaying the MongoDB change stream from the last resume token, which is handled separately by the change-stream worker's token-based resumption (D04).
+
+**Why 10-second interval:** The spec mandates 10 seconds explicitly. This is a reasonable balance between responsiveness and PG query load during a degraded state.
+
+**Why `setInterval` over recursive `setTimeout`:** `setInterval` is simpler to start and stop atomically using a single handle. `clearInterval` in the SIGTERM handler and `stopPgFallback` ensures no dangling timers survive process shutdown or Redis recovery.
 
 ---
 

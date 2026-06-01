@@ -5,20 +5,12 @@ import { ForbiddenError } from '../../utils/errors.js';
 import type { PostgresPool } from '../../db/postgres/index.js';
 import type { ConsistencyService } from './consistency.service.js';
 
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
-
 export function createConsistencyRoutes(
   consistencyService: ConsistencyService,
   pool: PostgresPool,
 ): FastifyPluginAsync {
   return fp(
     async (fastify: FastifyInstance) => {
-      // -----------------------------------------------------------------------
-      // Admin guard
-      // -----------------------------------------------------------------------
-
       async function assertAdmin(userId: string): Promise<void> {
         const result = await pool.query<{ role: string }>(
           `SELECT role FROM users WHERE id = $1 AND role = 'admin' LIMIT 1`,
@@ -29,9 +21,7 @@ export function createConsistencyRoutes(
         }
       }
 
-      // -----------------------------------------------------------------------
       // POST /admin/consistency-audit
-      // -----------------------------------------------------------------------
 
       fastify.post(
         '/admin/consistency-audit',

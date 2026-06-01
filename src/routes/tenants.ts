@@ -5,10 +5,6 @@ import { authenticateUser } from '../lib/auth.js';
 import { onboardTenant, getTenantQuota } from '../domain/tenants.js';
 import { ForbiddenError, NotFoundError } from '../errors.js';
 
-// ---------------------------------------------------------------------------
-// DB row types
-// ---------------------------------------------------------------------------
-
 interface TenantRow {
   id: string;
   name: string;
@@ -23,9 +19,7 @@ interface MemberRow {
   role: string;
 }
 
-// ---------------------------------------------------------------------------
 // Request body / param types
-// ---------------------------------------------------------------------------
 
 interface CreateTenantBody {
   tenantName: string;
@@ -44,10 +38,6 @@ interface PatchTenantBody {
   isActive?: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Membership guard
-// ---------------------------------------------------------------------------
-
 async function assertMember(userId: string, tenantId: string): Promise<MemberRow> {
   const result = await pool.query<MemberRow>(
     'SELECT user_id, role FROM tenant_members WHERE tenant_id = $1 AND user_id = $2 LIMIT 1',
@@ -59,10 +49,6 @@ async function assertMember(userId: string, tenantId: string): Promise<MemberRow
   }
   return member;
 }
-
-// ---------------------------------------------------------------------------
-// Plugin
-// ---------------------------------------------------------------------------
 
 const tenantPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   fastify.post<{ Body: CreateTenantBody }>(

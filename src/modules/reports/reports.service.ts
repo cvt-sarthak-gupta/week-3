@@ -9,10 +9,6 @@ export class ReportsService {
     private readonly mongo: MongoDatabase,
   ) {}
 
-  // ---------------------------------------------------------------------------
-  // getErrorIntelligence — single $facet aggregation over MongoDB events
-  // ---------------------------------------------------------------------------
-
   async getErrorIntelligence(
     projectId: string,
     days = 7,
@@ -162,10 +158,6 @@ export class ReportsService {
       newFingerprints: facet.newFingerprints.map((r) => r.fingerprint),
     };
   }
-
-  // ---------------------------------------------------------------------------
-  // getQuotaReport — RANK() window function over monthly_usage in Postgres
-  // ---------------------------------------------------------------------------
 
   async getQuotaReport(): Promise<QuotaReportRow[]> {
     return this.pool.withClient(async (client) => {

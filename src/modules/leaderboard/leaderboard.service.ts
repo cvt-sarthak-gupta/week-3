@@ -23,10 +23,8 @@ export class LeaderboardService {
     private readonly pool: PostgresPool,
   ) {}
 
-  // ---------------------------------------------------------------------------
   // getLeaderboard
   // ZREVRANGE with WITHSCORES, then join with project names from PG
-  // ---------------------------------------------------------------------------
 
   async getLeaderboard(tenantId: string): Promise<LeaderboardResult> {
     // 1. Fetch active project IDs and names for this tenant from PG

@@ -1,7 +1,3 @@
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export type BreakerState = 'closed' | 'open' | 'half-open';
 
 export interface BreakerConfig {
@@ -27,10 +23,6 @@ export interface Breaker {
   getState(): BreakerState;
   getMetrics(): BreakerMetrics;
 }
-
-// ---------------------------------------------------------------------------
-// Implementation
-// ---------------------------------------------------------------------------
 
 class CircuitBreakerOpenError extends Error {
   constructor(name: string) {
@@ -132,10 +124,6 @@ function createBreaker(name: string, opts?: BreakerConfig): Breaker {
 
   return { run, getState, getMetrics };
 }
-
-// ---------------------------------------------------------------------------
-// Module-level named breaker instances
-// ---------------------------------------------------------------------------
 
 export const breakers: Readonly<Record<'postgres' | 'mongo' | 'elasticsearch' | 'redis', Breaker>> =
   Object.freeze({

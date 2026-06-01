@@ -1,7 +1,3 @@
-// ---------------------------------------------------------------------------
-// Retention module types
-// ---------------------------------------------------------------------------
-
 export interface RetentionConfig {
   projectId: string;
   retentionDays: number;

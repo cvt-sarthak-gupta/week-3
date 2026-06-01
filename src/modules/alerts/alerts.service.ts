@@ -21,10 +21,6 @@ export class AlertsService {
     private readonly redis: RedisClient,
   ) {}
 
-  // ---------------------------------------------------------------------------
-  // createRule
-  // ---------------------------------------------------------------------------
-
   async createRule(
     projectId: string,
     tenantId: string,
@@ -79,10 +75,6 @@ export class AlertsService {
     logger.info({ alertRuleId, projectId, tenantId }, 'Alert rule created');
     return alertRuleId;
   }
-
-  // ---------------------------------------------------------------------------
-  // updateRule
-  // ---------------------------------------------------------------------------
 
   async updateRule(
     alertRuleId: string,
@@ -167,10 +159,6 @@ export class AlertsService {
     logger.info({ alertRuleId, projectId, tenantId }, 'Alert rule updated');
   }
 
-  // ---------------------------------------------------------------------------
-  // deleteRule
-  // ---------------------------------------------------------------------------
-
   async deleteRule(
     alertRuleId: string,
     projectId: string,
@@ -195,10 +183,6 @@ export class AlertsService {
     logger.info({ alertRuleId, projectId, tenantId }, 'Alert rule deleted');
   }
 
-  // ---------------------------------------------------------------------------
-  // listRules
-  // ---------------------------------------------------------------------------
-
   async listRules(projectId: string, tenantId: string): Promise<AlertRuleRow[]> {
     const result = await this.pool.query<AlertRuleRow>(
       `SELECT id, project_id, tenant_id, name, condition_type, threshold,
@@ -211,10 +195,6 @@ export class AlertsService {
     );
     return result.rows;
   }
-
-  // ---------------------------------------------------------------------------
-  // runPercolation
-  // ---------------------------------------------------------------------------
 
   async runPercolation(
     projectId: string,
@@ -244,10 +224,6 @@ export class AlertsService {
       .map((hit) => hit._source?.alertRuleId ?? hit._id)
       .filter((id): id is string => typeof id === 'string' && id.length > 0);
   }
-
-  // ---------------------------------------------------------------------------
-  // fireDedupAlert
-  // ---------------------------------------------------------------------------
 
   async fireDedupAlert(
     alertRuleId: string,

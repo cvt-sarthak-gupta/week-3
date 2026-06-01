@@ -2,19 +2,13 @@ import { Client } from '@elastic/elasticsearch';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
-// Singleton client
-// ---------------------------------------------------------------------------
-
 export const esClient = new Client({
   node: config.es.url,
   requestTimeout: 30_000,
   maxRetries: 3,
 });
 
-// ---------------------------------------------------------------------------
 // Index / alias naming helpers
-// ---------------------------------------------------------------------------
 
 /**
  * Returns the time-bucketed index name for a project and month.
@@ -34,10 +28,6 @@ export function indexName(projectId: string, date?: Date): string {
 export function aliasName(projectId: string): string {
   return `logs-${projectId}-active`;
 }
-
-// ---------------------------------------------------------------------------
-// ILM policies
-// ---------------------------------------------------------------------------
 
 interface TierPolicy {
   name: string;
@@ -113,10 +103,6 @@ export function resolveTierPolicy(retentionDays: number): string {
   if (retentionDays <= 90) return 'logs-tier-90d';
   return 'logs-tier-365d';
 }
-
-// ---------------------------------------------------------------------------
-// Index template
-// ---------------------------------------------------------------------------
 
 /**
  * Creates / updates the composable index template `logs-template` that covers
@@ -210,10 +196,6 @@ export async function ensureIndexTemplate(): Promise<void> {
   logger.info('Elasticsearch index template "logs-template" ensured');
 }
 
-// ---------------------------------------------------------------------------
-// Per-project index + alias management
-// ---------------------------------------------------------------------------
-
 // One-time guard: ensure our index template is registered before creating any
 // per-project index. This overrides the built-in ES8 `logs` data-stream template.
 let _templateEnsured = false;
@@ -221,6 +203,7 @@ export async function ensureTemplateOnce(): Promise<void> {
   if (_templateEnsured) return;
   await ensureIlmPolicies();
   await ensureIndexTemplate();
+  await ensurePercolatorIndex();
   _templateEnsured = true;
 }
 
@@ -263,10 +246,6 @@ export async function applyPolicyForProject(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Bulk indexing
-// ---------------------------------------------------------------------------
-
 /**
  * Bulk-indexes an array of log/event documents into the project's active alias.
  * Uses `eventId` (field `_id`) as the ES document `_id`.
@@ -300,10 +279,6 @@ export async function bulkIndex(
 
   return { indexed, errors };
 }
-
-// ---------------------------------------------------------------------------
-// Percolator index
-// ---------------------------------------------------------------------------
 
 export const percolatorIndex = 'alert_percolator';
 
@@ -352,10 +327,6 @@ export async function ensurePercolatorIndex(): Promise<void> {
 
   logger.info({ index: percolatorIndex }, 'Elasticsearch percolator index created');
 }
-
-// ---------------------------------------------------------------------------
-// Lifecycle helpers
-// ---------------------------------------------------------------------------
 
 export async function healthCheck(): Promise<{ ok: boolean; latencyMs: number }> {
   const start = Date.now();

@@ -1,7 +1,3 @@
-// ---------------------------------------------------------------------------
-// Consistency module types
-// ---------------------------------------------------------------------------
-
 export interface AuditMismatch {
   kind: 'missing_mongo_config' | 'missing_es_index' | 'count_drift' | 'orphan_mongo_config';
   projectId: string;

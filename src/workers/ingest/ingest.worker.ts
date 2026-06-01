@@ -7,19 +7,11 @@ import type { IngestPayload } from '../../modules/pipeline/pipeline.types.js';
 import { createWorkerLogger } from '../../utils/logger.js';
 import type { Logger } from 'pino';
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 const BATCH_SIZE = 64;
 const BLOCK_MS = 5000;
 const MAX_RETRIES = 3;
 const RECLAIM_IDLE_MS = 30_000;
 const RECLAIM_INTERVAL_MS = 30_000;
-
-// ---------------------------------------------------------------------------
-// Parsing helpers
-// ---------------------------------------------------------------------------
 
 /**
  * Convert a flat Redis stream field array [ 'key', 'value', ... ] into a
@@ -36,10 +28,6 @@ function fieldsToObject(fields: string[]): Record<string, string> {
   }
   return obj;
 }
-
-// ---------------------------------------------------------------------------
-// IngestWorker
-// ---------------------------------------------------------------------------
 
 export class IngestWorker {
   private readonly log: Logger;
@@ -86,10 +74,6 @@ export class IngestWorker {
     this.log.info('IngestWorker stop requested — draining current batch');
   }
 
-  // ---------------------------------------------------------------------------
-  // Internal poll loop
-  // ---------------------------------------------------------------------------
-
   private async runLoop(
     initialLastReclaimAt: number,
     setLastReclaimAt: (t: number) => void,
@@ -97,9 +81,7 @@ export class IngestWorker {
     let lastReclaimAt = initialLastReclaimAt;
 
     while (this.running) {
-      // -----------------------------------------------------------------------
       // Periodic reclaim of idle/orphaned PEL entries
-      // -----------------------------------------------------------------------
       if (Date.now() - lastReclaimAt >= RECLAIM_INTERVAL_MS) {
         lastReclaimAt = Date.now();
         setLastReclaimAt(lastReclaimAt);
@@ -137,9 +119,6 @@ export class IngestWorker {
         }
       }
 
-      // -----------------------------------------------------------------------
-      // Read new messages from the stream
-      // -----------------------------------------------------------------------
       let streamResults: Array<[string, Array<[string, string[]]>]> | null = null;
       try {
         // XREADGROUP returns: [[streamName, [[msgId, [f,v,...]], ...]]] or null

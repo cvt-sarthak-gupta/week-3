@@ -1,7 +1,3 @@
-// ---------------------------------------------------------------------------
-// Reports module types
-// ---------------------------------------------------------------------------
-
 export interface ErrorIntelligenceResult {
   topErrors: Array<{
     fingerprint: string;

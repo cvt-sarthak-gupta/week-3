@@ -5,10 +5,6 @@ import { applyPolicyForProject } from '../db/elastic.js';
 import { redis } from '../db/redis.js';
 import { logger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface OnboardTenantInput {
   tenantName: string;
   tenantSlug: string;
@@ -41,10 +37,6 @@ export interface TenantQuotaReport {
   percentUsed: number;
 }
 
-// ---------------------------------------------------------------------------
-// Compensating delete helpers
-// ---------------------------------------------------------------------------
-
 async function deletePgRows(tenantId: string, projectId: string): Promise<void> {
   try {
     await withClient(async (client) => {
@@ -61,16 +53,9 @@ async function deletePgRows(tenantId: string, projectId: string): Promise<void> 
   }
 }
 
-// ---------------------------------------------------------------------------
-// Onboarding
-// ---------------------------------------------------------------------------
-
 export async function onboardTenant(input: OnboardTenantInput): Promise<OnboardTenantResult> {
   const { tenantName, tenantSlug, planId, userId, projectName, projectSlug } = input;
 
-  // -------------------------------------------------------------------------
-  // Step 1: PG transaction — all inserts in one atomic block
-  // -------------------------------------------------------------------------
   let tenantId!: string;
   let projectId!: string;
   let apiKey!: string;
@@ -116,9 +101,6 @@ export async function onboardTenant(input: OnboardTenantInput): Promise<OnboardT
     );
   });
 
-  // -------------------------------------------------------------------------
-  // Step 2: MongoDB — insert project_configs document
-  // -------------------------------------------------------------------------
   try {
     await projectConfigsCollection().insertOne({
       _id: projectId,
@@ -140,9 +122,6 @@ export async function onboardTenant(input: OnboardTenantInput): Promise<OnboardT
     throw mongoErr;
   }
 
-  // -------------------------------------------------------------------------
-  // Step 3: Elasticsearch — create index + alias via ILM policy
-  // -------------------------------------------------------------------------
   try {
     await applyPolicyForProject(projectId, 90);
   } catch (esErr) {
@@ -159,9 +138,6 @@ export async function onboardTenant(input: OnboardTenantInput): Promise<OnboardT
     throw esErr;
   }
 
-  // -------------------------------------------------------------------------
-  // Step 4: Redis — init rate-limit key (best-effort, non-fatal)
-  // -------------------------------------------------------------------------
   try {
     await redis.set(`ratelimit:init:${projectId}`, '1', 'EX', 3600);
   } catch (redisErr) {
@@ -174,10 +150,6 @@ export async function onboardTenant(input: OnboardTenantInput): Promise<OnboardT
   logger.info({ tenantId, projectId }, 'Tenant onboarded successfully');
   return { tenantId, projectId, apiKey };
 }
-
-// ---------------------------------------------------------------------------
-// Quota report (single tenant)
-// ---------------------------------------------------------------------------
 
 export async function getTenantQuota(tenantId: string): Promise<TenantQuotaReport> {
   const result = await pool.query<{
@@ -225,10 +197,6 @@ export async function getTenantQuota(tenantId: string): Promise<TenantQuotaRepor
     percentUsed: percent,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Multi-tenant quota report (admin)
-// ---------------------------------------------------------------------------
 
 export interface TenantQuotaReportRow {
   tenantId: string;

@@ -4,10 +4,6 @@ import type { ElasticClient } from '../../db/elastic/index.js';
 import { logger } from '../../utils/logger.js';
 import type { AuditMismatch, AuditResult } from './consistency.types.js';
 
-// ---------------------------------------------------------------------------
-// Concurrency-limited batch runner
-// ---------------------------------------------------------------------------
-
 async function runConcurrent<T, R>(
   items: T[],
   concurrency: number,
@@ -22,10 +18,6 @@ async function runConcurrent<T, R>(
   return results;
 }
 
-// ---------------------------------------------------------------------------
-// ConsistencyService
-// ---------------------------------------------------------------------------
-
 interface ProjectRow {
   id: string;
   tenant_id: string;
@@ -38,10 +30,6 @@ export class ConsistencyService {
     private readonly mongo: MongoDatabase,
     private readonly es: ElasticClient,
   ) {}
-
-  // ---------------------------------------------------------------------------
-  // runAudit — cross-DB consistency audit across all active projects
-  // ---------------------------------------------------------------------------
 
   async runAudit(): Promise<AuditResult> {
     const ranAt = new Date();
@@ -106,10 +94,6 @@ export class ConsistencyService {
 
     return result;
   }
-
-  // ---------------------------------------------------------------------------
-  // auditProject — per-project checks
-  // ---------------------------------------------------------------------------
 
   private async auditProject(project: ProjectRow): Promise<AuditMismatch[]> {
     const issues: AuditMismatch[] = [];

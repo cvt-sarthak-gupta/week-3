@@ -1,10 +1,8 @@
 import { pool } from '../db/postgres.js';
 import { logger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
 // ensurePartitionsJob — called daily at midnight
 // Ensures billing_events partitions exist for current + next 3 months.
-// ---------------------------------------------------------------------------
 
 export async function ensurePartitionsJob(): Promise<void> {
   logger.info('Ensure partitions job starting');

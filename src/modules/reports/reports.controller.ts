@@ -5,9 +5,7 @@ import { ForbiddenError } from '../../utils/errors.js';
 import type { PostgresPool } from '../../db/postgres/index.js';
 import type { ReportsService } from './reports.service.js';
 
-// ---------------------------------------------------------------------------
 // Route param/query interfaces
-// ---------------------------------------------------------------------------
 
 interface ProjectParams {
   tenantId: string;
@@ -23,20 +21,12 @@ interface MemberRow {
   role: string;
 }
 
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
-
 export function createReportRoutes(
   reportsService: ReportsService,
   pool: PostgresPool,
 ): FastifyPluginAsync {
   return fp(
     async (fastify: FastifyInstance) => {
-      // -----------------------------------------------------------------------
-      // Guards
-      // -----------------------------------------------------------------------
-
       async function assertMember(userId: string, tenantId: string): Promise<MemberRow> {
         const result = await pool.query<MemberRow>(
           'SELECT user_id, role FROM tenant_members WHERE tenant_id = $1 AND user_id = $2 LIMIT 1',
@@ -59,9 +49,7 @@ export function createReportRoutes(
         }
       }
 
-      // -----------------------------------------------------------------------
       // GET /tenants/:tenantId/projects/:projectId/reports/error-intelligence
-      // -----------------------------------------------------------------------
 
       fastify.get<{ Params: ProjectParams; Querystring: ErrorIntelligenceQuerystring }>(
         '/tenants/:tenantId/projects/:projectId/reports/error-intelligence',
@@ -96,9 +84,7 @@ export function createReportRoutes(
         },
       );
 
-      // -----------------------------------------------------------------------
       // GET /admin/reports/quota
-      // -----------------------------------------------------------------------
 
       fastify.get(
         '/admin/reports/quota',

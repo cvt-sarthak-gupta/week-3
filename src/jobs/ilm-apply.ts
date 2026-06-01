@@ -2,10 +2,8 @@ import { pool } from '../db/postgres.js';
 import { applyPolicyForProject } from '../db/elastic.js';
 import { logger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
 // applyIlmJob — called daily at 1am
 // Reconcile project retention_days → ES ILM tier for all active projects.
-// ---------------------------------------------------------------------------
 
 export async function applyIlmJob(): Promise<void> {
   logger.info('ILM apply job starting');

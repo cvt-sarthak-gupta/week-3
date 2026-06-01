@@ -7,10 +7,6 @@ import { redis } from '../db/redis.js';
 import { ForbiddenError, NotFoundError } from '../errors.js';
 import { logger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
-// DB row types
-// ---------------------------------------------------------------------------
-
 interface ProjectRow {
   id: string;
   tenant_id: string;
@@ -27,10 +23,6 @@ interface MemberRow {
   role: string;
 }
 
-// ---------------------------------------------------------------------------
-// Request types
-// ---------------------------------------------------------------------------
-
 interface TenantParams {
   tenantId: string;
 }
@@ -45,10 +37,6 @@ interface CreateProjectBody {
   slug: string;
 }
 
-// ---------------------------------------------------------------------------
-// Membership guard
-// ---------------------------------------------------------------------------
-
 async function assertMember(userId: string, tenantId: string): Promise<MemberRow> {
   const result = await pool.query<MemberRow>(
     'SELECT user_id, role FROM tenant_members WHERE tenant_id = $1 AND user_id = $2 LIMIT 1',
@@ -60,10 +48,6 @@ async function assertMember(userId: string, tenantId: string): Promise<MemberRow
   }
   return member;
 }
-
-// ---------------------------------------------------------------------------
-// Plugin
-// ---------------------------------------------------------------------------
 
 const projectPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   fastify.get<{ Params: TenantParams }>(

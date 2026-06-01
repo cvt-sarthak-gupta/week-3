@@ -7,10 +7,6 @@ import { incrCounter } from '../db/redis.js';
 import { logger } from '../logger.js';
 import type { AlertRule } from '../schemas/alert.js';
 
-// ---------------------------------------------------------------------------
-// createAlertRule
-// ---------------------------------------------------------------------------
-
 export async function createAlertRule(
   projectId: string,
   tenantId: string,
@@ -55,10 +51,6 @@ export async function createAlertRule(
   logger.info({ alertRuleId, projectId, tenantId }, 'Alert rule created');
   return alertRuleId;
 }
-
-// ---------------------------------------------------------------------------
-// updateAlertRule
-// ---------------------------------------------------------------------------
 
 export async function updateAlertRule(
   alertRuleId: string,
@@ -145,10 +137,6 @@ export async function updateAlertRule(
   logger.info({ alertRuleId, projectId, tenantId }, 'Alert rule updated');
 }
 
-// ---------------------------------------------------------------------------
-// deleteAlertRule
-// ---------------------------------------------------------------------------
-
 export async function deleteAlertRule(
   alertRuleId: string,
   projectId: string,
@@ -169,10 +157,6 @@ export async function deleteAlertRule(
 
   logger.info({ alertRuleId, projectId, tenantId }, 'Alert rule deleted');
 }
-
-// ---------------------------------------------------------------------------
-// runPercolation
-// ---------------------------------------------------------------------------
 
 export async function runPercolation(
   projectId: string,
@@ -202,10 +186,6 @@ export async function runPercolation(
     .map((hit) => hit._source?.alertRuleId ?? hit._id)
     .filter((id): id is string => typeof id === 'string' && id.length > 0);
 }
-
-// ---------------------------------------------------------------------------
-// fireDedupAlert
-// ---------------------------------------------------------------------------
 
 const WEBHOOK_TIMEOUT_MS = 5_000;
 

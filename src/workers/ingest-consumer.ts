@@ -3,19 +3,11 @@ import { processEvent, type IngestPayload } from '../domain/ingestion.js';
 import { incrCounter } from '../db/redis.js';
 import { createWorkerLogger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 const BATCH_SIZE = 64;
 const BLOCK_MS = 5000;
 const MAX_RETRIES = 3;
 const RECLAIM_IDLE_MS = 30_000;
 const RECLAIM_INTERVAL_MS = 30_000;
-
-// ---------------------------------------------------------------------------
-// Parsing helpers
-// ---------------------------------------------------------------------------
 
 /**
  * Convert a flat Redis stream field array [ 'key', 'value', ... ] into a
@@ -33,10 +25,6 @@ function fieldsToObject(fields: string[]): Record<string, string> {
   return obj;
 }
 
-// ---------------------------------------------------------------------------
-// runIngestConsumer
-// ---------------------------------------------------------------------------
-
 export async function runIngestConsumer(workerName: string): Promise<void> {
   const log = createWorkerLogger(workerName);
   log.info({ stream: STREAM_KEY, group: CONSUMER_GROUP }, 'Ingest consumer starting');
@@ -53,9 +41,7 @@ export async function runIngestConsumer(workerName: string): Promise<void> {
   });
 
   while (running) {
-    // -----------------------------------------------------------------------
     // Periodic reclaim of idle/orphaned PEL entries
-    // -----------------------------------------------------------------------
     if (Date.now() - lastReclaimAt >= RECLAIM_INTERVAL_MS) {
       lastReclaimAt = Date.now();
       try {
@@ -92,9 +78,6 @@ export async function runIngestConsumer(workerName: string): Promise<void> {
       }
     }
 
-    // -----------------------------------------------------------------------
-    // Read new messages from the stream
-    // -----------------------------------------------------------------------
     let streamResults: Array<[string, Array<[string, string[]]>]> | null = null;
     try {
       // XREADGROUP returns: [[streamName, [[msgId, [f,v,...]], ...]]] or null

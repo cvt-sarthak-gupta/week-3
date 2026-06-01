@@ -1,10 +1,6 @@
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 
-// ---------------------------------------------------------------------------
-// Sub-schemas
-// ---------------------------------------------------------------------------
-
 export const StackFrameSchema = z.object({
   filename: z.string().optional(),
   function: z.string().optional(),
@@ -12,10 +8,6 @@ export const StackFrameSchema = z.object({
   column: z.number().int().optional(),
   context: z.string().optional(),
 });
-
-// ---------------------------------------------------------------------------
-// Main ingest schema
-// ---------------------------------------------------------------------------
 
 export const EventIngestSchema = z.object({
   type: z.enum(['error', 'log', 'metric', 'custom']),
@@ -44,10 +36,6 @@ export const EventIngestSchema = z.object({
 
 export type EventIngest = z.infer<typeof EventIngestSchema>;
 export type StackFrame = z.infer<typeof StackFrameSchema>;
-
-// ---------------------------------------------------------------------------
-// Fingerprint helper
-// ---------------------------------------------------------------------------
 
 /**
  * Generates a deterministic fingerprint from type + message (first 100 chars).

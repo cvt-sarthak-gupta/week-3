@@ -4,19 +4,11 @@ import type { RedisClient } from '../../db/redis/index.js';
 import { createWorkerLogger } from '../../utils/logger.js';
 import type { Logger } from 'pino';
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 const LEADER_KEY = 'change-stream:fatal:leader';
 const RESUME_HASH_KEY = 'change-stream:fatal:resume';
 const LEADER_TTL_MS = 30_000;
 const LEADER_POLL_MS = 5_000;
 const LEADER_RENEW_MS = 10_000;
-
-// ---------------------------------------------------------------------------
-// ChangeStreamWorker
-// ---------------------------------------------------------------------------
 
 export class ChangeStreamWorker {
   private readonly log: Logger;
@@ -62,10 +54,6 @@ export class ChangeStreamWorker {
     }
     this.log.info('ChangeStreamWorker stop requested');
   }
-
-  // ---------------------------------------------------------------------------
-  // Leader election + watch loop
-  // ---------------------------------------------------------------------------
 
   private async leaderElectionLoop(): Promise<void> {
     while (this.running) {
@@ -129,10 +117,6 @@ export class ChangeStreamWorker {
       }
     }
   }
-
-  // ---------------------------------------------------------------------------
-  // watchFatalEvents — opens and drains the change stream
-  // ---------------------------------------------------------------------------
 
   private async watchFatalEvents(): Promise<void> {
     // Read resume token from Redis

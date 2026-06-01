@@ -25,10 +25,6 @@ import { AlertWorker } from './workers/alert/alert.worker.js';
 import { JobScheduler } from './jobs/scheduler.js';
 import { logger } from './utils/logger.js';
 
-// ---------------------------------------------------------------------------
-// AppContainer interface
-// ---------------------------------------------------------------------------
-
 export interface AppContainer {
   // DB
   pool: PostgresPool;
@@ -61,10 +57,6 @@ export interface AppContainer {
   // Scheduler
   scheduler: JobScheduler;
 }
-
-// ---------------------------------------------------------------------------
-// createContainer — wires all dependencies in the correct order
-// ---------------------------------------------------------------------------
 
 export async function createContainer(): Promise<AppContainer> {
   // 1. Create DB clients
@@ -141,10 +133,6 @@ export async function createContainer(): Promise<AppContainer> {
     scheduler,
   };
 }
-
-// ---------------------------------------------------------------------------
-// closeContainer — graceful shutdown of all connections
-// ---------------------------------------------------------------------------
 
 export async function closeContainer(container: AppContainer): Promise<void> {
   logger.info('Closing container connections...');

@@ -43,10 +43,6 @@ export class RedisClient {
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Lifecycle helpers
-  // ---------------------------------------------------------------------------
-
   async connect(): Promise<void> {
     await this.client.connect();
     logger.info({ host: config.redis.host, port: config.redis.port }, 'Redis ready');
@@ -67,10 +63,6 @@ export class RedisClient {
       return { ok: false, latencyMs: Date.now() - start };
     }
   }
-
-  // ---------------------------------------------------------------------------
-  // Lua script loader
-  // ---------------------------------------------------------------------------
 
   /**
    * Loads a Lua script from `src/db/redis/lua/<name>.lua`, registers it with Redis
@@ -115,10 +107,6 @@ export class RedisClient {
     };
   }
 
-  // ---------------------------------------------------------------------------
-  // Stream helpers
-  // ---------------------------------------------------------------------------
-
   /**
    * Creates the consumer group for STREAM_KEY if it doesn't already exist.
    * Uses the MKSTREAM flag so the stream is also created if absent.
@@ -136,10 +124,6 @@ export class RedisClient {
       throw err;
     }
   }
-
-  // ---------------------------------------------------------------------------
-  // Metrics helpers
-  // ---------------------------------------------------------------------------
 
   /**
    * Atomically increments a Redis counter by `amount` (default 1).

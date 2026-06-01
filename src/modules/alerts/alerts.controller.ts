@@ -6,9 +6,7 @@ import type { AlertsService } from './alerts.service.js';
 import type { CreateAlertRuleInput, UpdateAlertRuleInput } from './alerts.types.js';
 import type { PostgresPool } from '../../db/postgres/index.js';
 
-// ---------------------------------------------------------------------------
 // Route param/body interfaces
-// ---------------------------------------------------------------------------
 
 interface ProjectParams {
   tenantId: string;
@@ -26,20 +24,12 @@ interface MemberRow {
   role: string;
 }
 
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
-
 export function createAlertRoutes(
   alertsService: AlertsService,
   pool: PostgresPool,
 ): FastifyPluginAsync {
   return fp(
     async (fastify: FastifyInstance) => {
-      // -----------------------------------------------------------------------
-      // Membership guard (inline — no Redis cache needed for alert CRUD)
-      // -----------------------------------------------------------------------
-
       async function assertMember(userId: string, tenantId: string): Promise<MemberRow> {
         const result = await pool.query<MemberRow>(
           'SELECT user_id, role FROM tenant_members WHERE tenant_id = $1 AND user_id = $2 LIMIT 1',
@@ -65,9 +55,7 @@ export function createAlertRoutes(
         }
       }
 
-      // -----------------------------------------------------------------------
       // GET /tenants/:tenantId/projects/:projectId/alert-rules
-      // -----------------------------------------------------------------------
 
       fastify.get<{ Params: ProjectParams }>(
         '/tenants/:tenantId/projects/:projectId/alert-rules',
@@ -96,9 +84,7 @@ export function createAlertRoutes(
         },
       );
 
-      // -----------------------------------------------------------------------
       // POST /tenants/:tenantId/projects/:projectId/alert-rules
-      // -----------------------------------------------------------------------
 
       fastify.post<{ Params: ProjectParams; Body: CreateAlertRuleInput }>(
         '/tenants/:tenantId/projects/:projectId/alert-rules',
@@ -145,9 +131,7 @@ export function createAlertRoutes(
         },
       );
 
-      // -----------------------------------------------------------------------
       // PUT /tenants/:tenantId/projects/:projectId/alert-rules/:alertRuleId
-      // -----------------------------------------------------------------------
 
       fastify.put<{ Params: AlertParams; Body: UpdateAlertRuleInput }>(
         '/tenants/:tenantId/projects/:projectId/alert-rules/:alertRuleId',
@@ -198,9 +182,7 @@ export function createAlertRoutes(
         },
       );
 
-      // -----------------------------------------------------------------------
       // DELETE /tenants/:tenantId/projects/:projectId/alert-rules/:alertRuleId
-      // -----------------------------------------------------------------------
 
       fastify.delete<{ Params: AlertParams }>(
         '/tenants/:tenantId/projects/:projectId/alert-rules/:alertRuleId',

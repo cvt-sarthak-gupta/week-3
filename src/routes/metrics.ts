@@ -2,10 +2,6 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest 
 import fp from 'fastify-plugin';
 import { getCounter } from '../db/redis.js';
 
-// ---------------------------------------------------------------------------
-// Metric key inventory
-// ---------------------------------------------------------------------------
-
 const METRIC_KEYS = [
   'metrics:events:ingested:total',
   'metrics:events:ingested:errors',
@@ -24,10 +20,6 @@ const METRIC_KEYS = [
 ] as const;
 
 type MetricKey = (typeof METRIC_KEYS)[number];
-
-// ---------------------------------------------------------------------------
-// Plugin
-// ---------------------------------------------------------------------------
 
 const metricsPluginHandler: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   fastify.get(

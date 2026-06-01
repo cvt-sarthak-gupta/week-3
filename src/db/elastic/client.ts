@@ -2,10 +2,6 @@ import { Client } from '@elastic/elasticsearch';
 import { config } from '../../config.js';
 import { logger } from '../../utils/logger.js';
 
-// ---------------------------------------------------------------------------
-// ILM tier policy shape
-// ---------------------------------------------------------------------------
-
 interface TierPolicy {
   name: string;
   deleteAfterRolloverDays: number;
@@ -33,9 +29,7 @@ export class ElasticClient {
     });
   }
 
-  // ---------------------------------------------------------------------------
   // Index / alias naming helpers
-  // ---------------------------------------------------------------------------
 
   /**
    * Returns the time-bucketed index name for a project and month.
@@ -55,10 +49,6 @@ export class ElasticClient {
   aliasName(projectId: string): string {
     return `logs-${projectId}-active`;
   }
-
-  // ---------------------------------------------------------------------------
-  // ILM policies
-  // ---------------------------------------------------------------------------
 
   /**
    * Creates or updates all three ILM lifecycle policies at startup.
@@ -123,10 +113,6 @@ export class ElasticClient {
     if (retentionDays <= 90) return 'logs-tier-90d';
     return 'logs-tier-365d';
   }
-
-  // ---------------------------------------------------------------------------
-  // Index template
-  // ---------------------------------------------------------------------------
 
   /**
    * Creates / updates the composable index template `logs-template` that covers
@@ -227,10 +213,6 @@ export class ElasticClient {
     this._templateEnsured = true;
   }
 
-  // ---------------------------------------------------------------------------
-  // Per-project index + alias management
-  // ---------------------------------------------------------------------------
-
   /**
    * Ensures the monthly index for `projectId` exists and the project alias
    * points to it, then applies the appropriate ILM policy.
@@ -270,10 +252,6 @@ export class ElasticClient {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Bulk indexing
-  // ---------------------------------------------------------------------------
-
   /**
    * Bulk-indexes an array of log/event documents into the project's active alias.
    * Uses `eventId` (field `_id`) as the ES document `_id`.
@@ -307,10 +285,6 @@ export class ElasticClient {
 
     return { indexed, errors };
   }
-
-  // ---------------------------------------------------------------------------
-  // Percolator index
-  // ---------------------------------------------------------------------------
 
   /**
    * Creates the alert percolator index with:
@@ -357,10 +331,6 @@ export class ElasticClient {
 
     logger.info({ index: this.percolatorIndex }, 'Elasticsearch percolator index created');
   }
-
-  // ---------------------------------------------------------------------------
-  // Lifecycle helpers
-  // ---------------------------------------------------------------------------
 
   async healthCheck(): Promise<{ ok: boolean; latencyMs: number }> {
     const start = Date.now();

@@ -3,10 +3,6 @@ import { pool, withTenant } from '../db/postgres.js';
 import { NotFoundError } from '../errors.js';
 import { logger } from '../logger.js';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface ProjectRecord {
   id: string;
   tenantId: string;
@@ -15,16 +11,8 @@ export interface ProjectRecord {
   retentionDays: number;
 }
 
-// ---------------------------------------------------------------------------
-// Internal constants
-// ---------------------------------------------------------------------------
-
 const API_KEY_CACHE_PREFIX = 'apikey:';
 const API_KEY_CACHE_TTL = 60; // seconds
-
-// ---------------------------------------------------------------------------
-// API key validation
-// ---------------------------------------------------------------------------
 
 /**
  * Validates an API key by checking Redis first, then falling back to PostgreSQL.
@@ -87,10 +75,6 @@ export async function validateApiKey(apiKey: string): Promise<ProjectRecord> {
   return record;
 }
 
-// ---------------------------------------------------------------------------
-// Get project by ID (tenant-scoped via RLS)
-// ---------------------------------------------------------------------------
-
 /**
  * Fetches a project by ID within the given tenant context.
  * Uses withTenant to set the RLS session variable.
@@ -139,10 +123,6 @@ export async function getProjectById(
     };
   });
 }
-
-// ---------------------------------------------------------------------------
-// Cache invalidation
-// ---------------------------------------------------------------------------
 
 /**
  * Removes the Redis cache entry for the given API key.
