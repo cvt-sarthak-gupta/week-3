@@ -17,7 +17,13 @@ async function main(): Promise<void> {
   await container.initialize();
   logger.info('All DBs ready — starting change stream worker');
 
-  const worker = new ChangeStreamWorker(container.mongo, container.redis);
+  const worker = new ChangeStreamWorker(
+    container.mongo,
+    container.redis,
+    async (projectId) => {
+      await container.reports.invalidateProjectReports(projectId);
+    },
+  );
 
   // Graceful shutdown
   const shutdown = async (): Promise<void> => {

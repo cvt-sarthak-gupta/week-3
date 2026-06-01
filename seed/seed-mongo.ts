@@ -263,12 +263,12 @@ async function setupCollection(db: Db): Promise<Collection<Record<string, unknow
           occurredAt: { bsonType: 'date' },
           ingestedAt: { bsonType: 'date' },
           fingerprint: { bsonType: 'string' },
-          payload: { bsonType: 'object' },
+          // payload is intentionally unconstrained — arbitrary JSON allowed
         },
       },
     },
-    validationLevel: 'moderate',
-    validationAction: 'warn',
+    validationLevel: 'strict',
+    validationAction: 'error',
   });
 
   console.log('[mongo] Collection validator applied.');

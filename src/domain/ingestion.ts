@@ -304,13 +304,19 @@ export class IngestionService {
     // async brings pipeline p95 from ~135ms to ~80ms while keeping correctness intact.
     void this.traceStage('percolate', eventId, traceId, async () => {
       try {
+        // Convert tags from Record<string,string> to nested [{key,value}] format
+        // that matches the ES percolator index mapping (type: nested).
+        const tagsForPercolate = doc.tags !== undefined
+          ? Object.entries(doc.tags).map(([key, value]) => ({ key, value }))
+          : undefined;
+
         const percolateDoc = {
           message: doc.message,
           severity: doc.severity,
           fingerprint: doc.fingerprint,
           projectId,
           occurredAt: doc.occurredAt.toISOString(),
-          ...(doc.tags !== undefined ? { tags: doc.tags } : {}),
+          ...(tagsForPercolate !== undefined ? { tags: tagsForPercolate } : {}),
           ...(doc.payload !== undefined ? { payload: doc.payload } : {}),
         };
 
@@ -318,9 +324,17 @@ export class IngestionService {
           const response = await this.es.client.search({
             index: percolatorIndex,
             query: {
-              percolate: {
-                field: 'query',
-                document: percolateDoc,
+              bool: {
+                must: [
+                  {
+                    percolate: {
+                      field: 'query',
+                      document: percolateDoc,
+                    },
+                  },
+                  // Scope to this project so rules from other tenants never match
+                  { term: { projectId } },
+                ],
               },
             },
             _source: true,

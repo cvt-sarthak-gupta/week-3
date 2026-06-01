@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { MongoClient, type Collection } from 'mongodb'
+import { getContainer } from '../helpers/setup.js'
 
 const mongoClient = new MongoClient(
   process.env['MONGO_URL'] ?? 'mongodb://localhost:27018/pulseboard_test?directConnection=true'
@@ -115,12 +116,14 @@ describe('M3: Error Intelligence Aggregation Pipeline', () => {
     expect((result?.['topErrors'] as unknown[]).length).toBeGreaterThan(0)
     expect((result?.['topErrors'] as unknown[]).length).toBeLessThanOrEqual(10)
 
-    // Verify the top error has required fields
+    // Verify the top error has required fields including affectedUsers
     const top = (result?.['topErrors'] as Record<string, unknown>[])[0]
     expect(top).toHaveProperty('_id')
     expect(top).toHaveProperty('count')
     expect(top).toHaveProperty('firstSeen')
     expect(top).toHaveProperty('lastSeen')
+    expect(top).toHaveProperty('affectedUsers')
+    expect(Array.isArray(top?.['affectedUsers'])).toBe(true)
 
     // New fingerprints should exist (last 10 events with distinct fingerprints in 24h)
     expect((result?.['newFingerprints'] as unknown[]).length).toBeGreaterThan(0)
@@ -128,6 +131,27 @@ describe('M3: Error Intelligence Aggregation Pipeline', () => {
     // Performance: on test dataset, well under 2s
     expect(elapsed).toBeLessThan(2000)
   }, 30_000)
+
+  it('ReportService.getErrorIntelligenceReport returns correctly shaped report', async () => {
+    const container = getContainer()
+    const report = await container.reports.getErrorIntelligenceReport(PROJECT_ID, 7) as Record<string, unknown>
+
+    expect(report).toHaveProperty('topErrors')
+    expect(report).toHaveProperty('hourlyHistogram')
+    expect(report).toHaveProperty('severityBrowserBreakdown')
+    expect(report).toHaveProperty('newFingerprints')
+
+    const topErrors = report['topErrors'] as Record<string, unknown>[]
+    expect(Array.isArray(topErrors)).toBe(true)
+    if (topErrors.length > 0) {
+      const first = topErrors[0]!
+      expect(first).toHaveProperty('fingerprint')
+      expect(first).toHaveProperty('count')
+      expect(first).toHaveProperty('firstSeen')
+      expect(first).toHaveProperty('lastSeen')
+      expect(first).toHaveProperty('affectedUsers')
+    }
+  })
 
   it('top errors are sorted by count descending', async () => {
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400_000)

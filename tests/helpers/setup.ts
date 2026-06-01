@@ -139,6 +139,8 @@ export async function truncateAll(): Promise<void> {
   // PostgreSQL — truncate in dependency order
   await container.pg.query(`
     TRUNCATE
+      audit_log,
+      billing_events,
       monthly_usage,
       usage_dedup,
       alert_rules,

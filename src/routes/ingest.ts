@@ -30,14 +30,6 @@ interface EventBody {
 const tenantPlanCache = new Map<string, { planId: string | null; cachedAt: number }>();
 const TENANT_PLAN_CACHE_TTL_MS = 5 * 60 * 1000;
 
-function todayKey(): string {
-  const now = new Date();
-  const yyyy = now.getUTCFullYear();
-  const mm = (now.getUTCMonth() + 1).toString().padStart(2, '0');
-  const dd = now.getUTCDate().toString().padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-
 export function ingestRoutes(container: AppContainer): FastifyPluginAsync {
   return fp(async (fastify) => {
     const apiKeyPreHandler = container.auth.apiKeyPreHandler();
@@ -66,14 +58,6 @@ export function ingestRoutes(container: AppContainer): FastifyPluginAsync {
       const occurredAt = event.occurredAt ?? new Date().toISOString();
       const fingerprint = event.fingerprint ?? `${event.type}:${event.message}`;
 
-      const dateKey = todayKey();
-      const leaderboardKey = `leaderboard:${dateKey}`;
-
-      // Midnight UTC of the current day (= start of tomorrow)
-      const nextMidnightUtc = new Date();
-      nextMidnightUtc.setUTCHours(24, 0, 0, 0);
-      const midnightUnixSeconds = Math.floor(nextMidnightUtc.getTime() / 1000);
-
       const pipeline = container.redis.client.pipeline();
       pipeline.xadd(
         STREAM_KEY,
@@ -96,9 +80,6 @@ export function ingestRoutes(container: AppContainer): FastifyPluginAsync {
         'deviceContext', event.deviceContext !== undefined ? JSON.stringify(event.deviceContext) : '',
         'payload', event.payload !== undefined ? JSON.stringify(event.payload) : '',
       );
-      pipeline.zincrby(leaderboardKey, 1, projectId);
-      // Expire at midnight UTC so yesterday's leaderboard is auto-cleaned
-      pipeline.expireat(leaderboardKey, midnightUnixSeconds);
       const results = await pipeline.exec();
 
       // xadd is the first command in the pipeline (index 0).

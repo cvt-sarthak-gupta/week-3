@@ -95,6 +95,21 @@ describe('M2: MongoDB Index Coverage', () => {
     assertNoCollScan(explain)
   })
 
+  it('Q4: count events grouped by severity for project over date range uses an index (no COLLSCAN)', async () => {
+    // Q4 requires projectId + occurredAt range — covered by { projectId, severity, occurredAt } index
+    const explain = await collection()
+      .find({
+        projectId: PROJECT_ID,
+        occurredAt: {
+          $gte: new Date(Date.now() - 7 * 86_400_000),
+          $lte: new Date(),
+        },
+      })
+      .explain('executionStats') as Record<string, unknown>
+
+    assertNoCollScan(explain)
+  })
+
   it('Q5: events by userContext.email uses an index (no COLLSCAN)', async () => {
     const explain = await collection()
       .find({ projectId: PROJECT_ID, 'userContext.email': 'user5@test.com' })
@@ -103,7 +118,7 @@ describe('M2: MongoDB Index Coverage', () => {
     assertNoCollScan(explain)
   })
 
-  it('all four indexes appear in the collection index list', async () => {
+  it('all five indexes appear in the collection index list', async () => {
     const indexes = await collection().indexes()
     const indexKeys = indexes.map((idx) => JSON.stringify(idx.key))
 

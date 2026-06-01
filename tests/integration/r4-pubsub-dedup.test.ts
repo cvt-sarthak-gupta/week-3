@@ -28,7 +28,8 @@ describe('R4: Pub/Sub Alert Deduplication', () => {
 
     const alertRuleId = `rule-${Date.now()}`
     const eventId = `event-${Date.now()}`
-    const lockKey = `fire-lock:${alertRuleId}:${eventId}`
+    // Lock key is per-alertRuleId only (60s cooldown), matching production AlertService.fireDedupAlert
+    const lockKey = `fire-lock:${alertRuleId}`
     const channel = `alerts:fatal:proj-test-${Date.now()}`
 
     let firedCount = 0
@@ -36,7 +37,7 @@ describe('R4: Pub/Sub Alert Deduplication', () => {
 
     async function handleAlert(message: string, name: string) {
       receivedBy.push(name)
-      // Race to acquire the dedup lock
+      // Race to acquire the dedup lock (per-rule, 60s TTL — matches production)
       const won = await lockClient.set(lockKey, name, 'EX', 60, 'NX')
       if (won === 'OK') firedCount++
     }
@@ -58,31 +59,61 @@ describe('R4: Pub/Sub Alert Deduplication', () => {
     await new Promise(r => setTimeout(r, 500))
 
     expect(receivedBy.length).toBe(3)  // all 3 received it
-    expect(firedCount).toBe(1)         // exactly 1 fired
+    expect(firedCount).toBe(1)         // exactly 1 fired (per-rule dedup)
   }, 10_000)
 
-  it('second message with different eventId fires again (lock is per-event)', async () => {
+  it('second event for same rule within TTL does NOT fire again (per-rule cooldown)', async () => {
     const publisher = makeClient()
     const sub = makeClient()
     const lockClient = makeClient()
 
-    const alertRuleId = `rule-${Date.now()}`
-    const channel = `alerts:fatal:proj-dedup-${Date.now()}`
+    const alertRuleId = `rule-cooldown-${Date.now()}`
+    const channel = `alerts:fatal:proj-cooldown-${Date.now()}`
     let firedCount = 0
 
     await sub.subscribe(channel)
     sub.on('message', async (_, msg) => {
-      const { eventId } = JSON.parse(msg) as { eventId: string }
-      const lockKey = `fire-lock:${alertRuleId}:${eventId}`
+      const { alertRuleId: ruleId } = JSON.parse(msg) as { alertRuleId: string }
+      // Per-rule lock — same key for both events
+      const lockKey = `fire-lock:${ruleId}`
       const won = await lockClient.set(lockKey, 'sub', 'EX', 60, 'NX')
       if (won === 'OK') firedCount++
     })
 
     await new Promise(r => setTimeout(r, 100))
 
-    // Two different events — should both fire
+    // Two different events matching the same rule — only FIRST should fire (lock held for 60s)
     await publisher.publish(channel, JSON.stringify({ alertRuleId, eventId: 'event-A' }))
     await publisher.publish(channel, JSON.stringify({ alertRuleId, eventId: 'event-B' }))
+
+    await new Promise(r => setTimeout(r, 400))
+    // Only 1 fires — the per-rule lock prevents the second burst within the TTL window
+    expect(firedCount).toBe(1)
+  }, 10_000)
+
+  it('different alert rules each fire independently (locks are per-rule)', async () => {
+    const publisher = makeClient()
+    const sub = makeClient()
+    const lockClient = makeClient()
+
+    const ruleA = `rule-a-${Date.now()}`
+    const ruleB = `rule-b-${Date.now()}`
+    const channel = `alerts:fatal:proj-multi-${Date.now()}`
+    let firedCount = 0
+
+    await sub.subscribe(channel)
+    sub.on('message', async (_, msg) => {
+      const { alertRuleId } = JSON.parse(msg) as { alertRuleId: string }
+      const lockKey = `fire-lock:${alertRuleId}`
+      const won = await lockClient.set(lockKey, 'sub', 'EX', 60, 'NX')
+      if (won === 'OK') firedCount++
+    })
+
+    await new Promise(r => setTimeout(r, 100))
+
+    // Two different rules — each has its own lock key, both should fire
+    await publisher.publish(channel, JSON.stringify({ alertRuleId: ruleA, eventId: 'event-A' }))
+    await publisher.publish(channel, JSON.stringify({ alertRuleId: ruleB, eventId: 'event-B' }))
 
     await new Promise(r => setTimeout(r, 400))
     expect(firedCount).toBe(2)

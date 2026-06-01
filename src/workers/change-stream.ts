@@ -15,15 +15,21 @@ export class ChangeStreamWorker {
   private readonly mongo: MongoDatabase;
   private readonly redis: RedisDatabase;
   private readonly nodeId: string;
+  private readonly onFatalEvent: ((projectId: string) => Promise<void>) | undefined;
 
   private _running = false;
   private _holdsLock = false;
   private _renewalTimer: ReturnType<typeof setInterval> | null = null;
   private _changeStream: Awaited<ReturnType<ReturnType<MongoDatabase['events']>['watch']>> | null = null;
 
-  constructor(mongo: MongoDatabase, redis: RedisDatabase) {
+  constructor(
+    mongo: MongoDatabase,
+    redis: RedisDatabase,
+    onFatalEvent?: (projectId: string) => Promise<void>,
+  ) {
     this.mongo = mongo;
     this.redis = redis;
+    this.onFatalEvent = onFatalEvent;
     this.nodeId = process.env['HOSTNAME'] ?? nanoid(8);
   }
 
@@ -179,6 +185,11 @@ export class ChangeStreamWorker {
               log.warn({ err, channel }, 'Redis PUBLISH failed');
             });
             log.debug({ projectId, eventId: fullDoc['_id'] }, 'Fatal event published');
+
+            // Invalidate cached reports for this project so next read reflects the new event
+            void this.onFatalEvent?.(projectId).catch((err: unknown) => {
+              log.warn({ err, projectId }, 'onFatalEvent cache-invalidation callback failed (non-fatal)');
+            });
           }
         }
       }

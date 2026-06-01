@@ -212,6 +212,7 @@ export class ReportService {
           newFingerprints: facet.newFingerprints.map((r) => r.fingerprint),
         };
       },
+      projectId,
     );
   }
 
@@ -256,26 +257,16 @@ export class ReportService {
             },
           },
 
-          // Severity breakdown
+          // Severity breakdown with top 3 most recent events per bucket
           by_severity: {
             terms: {
               field: 'severity',
               size: 10,
             },
-          },
-
-          // Top affected users with latest event sample via top_hits
-          top_affected_users: {
-            terms: {
-              field: 'userContext.userId',
-              size: 10,
-              order: { _count: 'desc' },
-              min_doc_count: 1,
-            },
             aggs: {
-              latest_event: {
+              top_events: {
                 top_hits: {
-                  size: 1,
+                  size: 3,
                   sort: [{ occurredAt: { order: 'desc' } }],
                   _source: {
                     includes: ['message', 'severity', 'occurredAt', 'fingerprint'],
@@ -285,13 +276,40 @@ export class ReportService {
             },
           },
 
-          // Significant error terms relative to background corpus
-          significant_error_terms: {
-            significant_terms: {
-              field: 'message.keyword',
-              size: 10,
-              background_filter: {
-                term: { projectId },
+          // Percentiles on response time (only where field exists)
+          response_time_percentiles: {
+            filter: { exists: { field: 'payload.responseTimeMs' } },
+            aggs: {
+              percentiles: {
+                percentiles: {
+                  field: 'payload.responseTimeMs',
+                  percents: [50, 75, 95, 99],
+                },
+              },
+            },
+          },
+
+          // Approximate unique error count via cardinality on fingerprint
+          unique_error_count: {
+            cardinality: {
+              field: 'fingerprint',
+            },
+          },
+
+          // Significant error terms: foreground = last 1h, background = full project corpus
+          recent_hour_terms: {
+            filter: {
+              range: {
+                occurredAt: { gte: new Date(now.getTime() - 60 * 60 * 1000).toISOString() },
+              },
+            },
+            aggs: {
+              significant_error_terms: {
+                significant_terms: {
+                  field: 'message.keyword',
+                  size: 10,
+                  background_filter: { term: { projectId } },
+                },
               },
             },
           },
@@ -312,23 +330,26 @@ export class ReportService {
         return {
           eventsOverTime: [],
           bySeverity: [],
-          topAffectedUsers: [],
+          responseTimePercentiles: null,
+          uniqueErrorCount: 0,
           significantErrorTerms: [],
           errorCount: 0,
           totalCount: response.hits.total,
         };
       }
 
+      const recentHourTerms = aggs['recent_hour_terms'] as { significant_error_terms: { buckets: unknown[] } } | undefined;
+
       return {
         eventsOverTime: (aggs['events_over_time'] as { buckets: unknown[] })?.buckets ?? [],
         bySeverity: (aggs['by_severity'] as { buckets: unknown[] })?.buckets ?? [],
-        topAffectedUsers: (aggs['top_affected_users'] as { buckets: unknown[] })?.buckets ?? [],
-        significantErrorTerms:
-          (aggs['significant_error_terms'] as { buckets: unknown[] })?.buckets ?? [],
+        responseTimePercentiles: (aggs['response_time_percentiles'] as { percentiles: { values: Record<string, number> } } | undefined)?.percentiles?.values ?? null,
+        uniqueErrorCount: (aggs['unique_error_count'] as { value: number })?.value ?? 0,
+        significantErrorTerms: recentHourTerms?.significant_error_terms?.buckets ?? [],
         errorCount: (aggs['error_rate'] as { doc_count: number })?.doc_count ?? 0,
         totalCount: response.hits.total,
       };
-    });
+    }, projectId);
   }
 
   async invalidateProjectReports(projectId: string): Promise<void> {

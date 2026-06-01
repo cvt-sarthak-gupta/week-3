@@ -94,7 +94,7 @@ export class ElasticsearchDatabase {
               min_age: '30d',
               actions: {
                 set_priority: { priority: 0 },
-                freeze: {},
+                // freeze is deprecated in ES 8.x; cold phase simply reduces shard priority
               },
             },
             delete: {
@@ -176,6 +176,10 @@ export class ElasticsearchDatabase {
             message: {
               type: 'text',
               analyzer: 'logs_analyzer',
+              // search_analyzer uses standard so edge-ngrams are not applied at
+              // query time — only at index time. Without this, a 2-char query
+              // expands into ngram tokens and over-matches.
+              search_analyzer: 'standard',
               fields: {
                 // keyword sub-field enables terms/significant_terms aggregations
                 // on full message strings (ignore_above prevents over-large tokens).

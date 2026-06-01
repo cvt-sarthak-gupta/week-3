@@ -98,6 +98,90 @@ describe('M4: Change Stream → Redis Pub/Sub', () => {
     }
   }, 10_000)
 
+  it('resume token stored after fatal event; new stream opened from token receives only subsequent events', async () => {
+    const RESUME_KEY = 'change-stream:fatal:resume'
+    const db = mongoClient.db('pulseboard_test')
+    const col = db.collection('events')
+
+    // Step 1: open a change stream and insert a fatal event to capture its resume token
+    const cs1 = col.watch(
+      [{ $match: { 'fullDocument.severity': 'fatal', operationType: 'insert' } }],
+      { fullDocument: 'updateLookup' },
+    )
+
+    let capturedToken: Record<string, unknown> | null = null
+    const tokenPromise = new Promise<void>((resolve) => {
+      cs1.on('change', (change) => {
+        if (change._id) {
+          capturedToken = change._id as Record<string, unknown>
+          resolve()
+        }
+      })
+    })
+
+    await new Promise(r => setTimeout(r, 150))
+    const firstEventId = `m4-resume-first-${Date.now()}`
+    await col.insertOne({
+      _id: firstEventId as unknown as import('mongodb').ObjectId,
+      projectId: PROJECT_ID,
+      type: 'error',
+      severity: 'fatal',
+      message: 'First event before resume',
+      occurredAt: new Date(),
+      ingestedAt: new Date(),
+      fingerprint: 'fp-m4-resume-first',
+    })
+
+    await Promise.race([
+      tokenPromise,
+      new Promise((_, r) => setTimeout(() => r(new Error('token capture timeout')), 3000)),
+    ])
+    await cs1.close()
+
+    expect(capturedToken).not.toBeNull()
+
+    // Step 2: store token in Redis (as ChangeStreamWorker does)
+    await testRedis.hset(RESUME_KEY, 'token', JSON.stringify(capturedToken))
+
+    // Step 3: open a new change stream WITH the resume token — should NOT replay the first event
+    const cs2 = col.watch(
+      [{ $match: { 'fullDocument.severity': 'fatal', operationType: 'insert' } }],
+      { fullDocument: 'updateLookup', resumeAfter: capturedToken! },
+    )
+
+    const receivedIds: string[] = []
+    cs2.on('change', (change) => {
+      const doc = (change as { fullDocument?: { _id?: string } }).fullDocument
+      if (doc?._id) receivedIds.push(doc._id)
+    })
+
+    await new Promise(r => setTimeout(r, 150))
+
+    // Insert a NEW event after the resume point
+    const secondEventId = `m4-resume-second-${Date.now()}`
+    await col.insertOne({
+      _id: secondEventId as unknown as import('mongodb').ObjectId,
+      projectId: PROJECT_ID,
+      type: 'error',
+      severity: 'fatal',
+      message: 'Second event after resume',
+      occurredAt: new Date(),
+      ingestedAt: new Date(),
+      fingerprint: 'fp-m4-resume-second',
+    })
+
+    await new Promise(r => setTimeout(r, 500))
+    await cs2.close()
+
+    // Must receive the second event
+    expect(receivedIds).toContain(secondEventId)
+    // Must NOT receive the first event again (resume skips it)
+    expect(receivedIds).not.toContain(firstEventId)
+
+    // Clean up
+    await testRedis.hdel(RESUME_KEY, 'token')
+  }, 15_000)
+
   it('non-fatal events do not trigger the change stream filter', async () => {
     const db = mongoClient.db('pulseboard_test')
     const col = db.collection('events')

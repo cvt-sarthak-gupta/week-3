@@ -58,12 +58,16 @@ export class CacheService {
     key: string,
     ttlSeconds: number,
     fetcher: () => Promise<T>,
+    projectId?: string,
   ): Promise<T> {
     // 1. Try cache hit
     const cached = await this.redis.client.get(key);
     if (cached !== null) {
+      if (projectId) this.incrHit(projectId);
       return JSON.parse(cached) as T;
     }
+
+    if (projectId) this.incrMiss(projectId);
 
     // 2. Try to acquire fill lock (stampede prevention)
     const ownerId = this.generateOwnerId();

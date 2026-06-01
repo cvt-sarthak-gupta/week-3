@@ -172,14 +172,16 @@ export function searchRoutes(container: AppContainer): FastifyPluginAsync {
         const esCircuitOpen = container.breakers.elasticsearch.getState() === 'open';
 
         if (cachedResult !== null) {
-          const cached = JSON.parse(cachedResult) as Record<string, unknown>;
           if (esCircuitOpen) {
-            logger.warn({ projectId }, 'ES down — serving stale cached search result');
+            // ES is down — spec requires 503 + Retry-After even if we have a cached result.
+            // The cache is preserved for when ES recovers.
+            logger.warn({ projectId }, 'ES down — returning 503 (Retry-After: 60)');
             void reply
-              .status(206)
-              .header('X-Cache', 'STALE')
-              .send({ ...cached, cacheHit: true, stale: true });
+              .status(503)
+              .header('Retry-After', '60')
+              .send({ error: 'Search service temporarily unavailable', retryAfter: 60 });
           } else {
+            const cached = JSON.parse(cachedResult) as Record<string, unknown>;
             void reply
               .status(200)
               .header('X-Cache', 'HIT')

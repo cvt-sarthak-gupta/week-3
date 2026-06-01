@@ -48,15 +48,22 @@ export class RateLimitService {
     const now = Date.now();
     const reqId = nanoid(8);
 
-    const result = (await this.redis.client.evalsha(
-      script.sha,
-      1,
-      key,
-      String(config.windowMs),
-      String(config.maxRequests),
-      String(now),
-      reqId,
-    )) as [number, number, number];
+    let result: [number, number, number];
+    try {
+      result = (await this.redis.client.evalsha(
+        script.sha,
+        1,
+        key,
+        String(config.windowMs),
+        String(config.maxRequests),
+        String(now),
+        reqId,
+      )) as [number, number, number];
+    } catch (err) {
+      // Redis down — fail open: allow the request and log a warning
+      logger.warn({ err, apiKey }, 'rate limit check failed (Redis error) — failing open');
+      return { allowed: true, remaining: -1, resetAt: now + config.windowMs };
+    }
 
     logger.debug(
       { apiKey, allowed: result[0] === 1, remaining: result[1] },

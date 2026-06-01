@@ -23,7 +23,9 @@ import {
   getPgPool,
   getMongoDb,
   getRedisClient,
+  getContainer,
 } from '../helpers/setup.js'
+import { STREAM_KEY, CONSUMER_GROUP } from '../../src/db/redis.js'
 
 // ---------------------------------------------------------------------------
 // Suite setup
@@ -132,6 +134,85 @@ describe('X1: End-to-End Ingestion Pipeline', () => {
     const score = await redis.zscore(`leaderboard:${dateKey}`, testTenant.projectId)
     expect(Number(score)).toBeGreaterThanOrEqual(1)
   }, 30_000)
+
+  // -------------------------------------------------------------------------
+  // Stream consumer: XADD → XREADGROUP → processEvent → XACK
+  // -------------------------------------------------------------------------
+
+  it('stream consumer: XADD message is read via XREADGROUP, processed, and ACKed', async () => {
+    const container = getContainer()
+    const redis = getRedisClient()
+    const eventId = crypto.randomUUID()
+    const traceId = crypto.randomUUID()
+
+    // Ensure consumer group exists
+    await container.redis.ensureConsumerGroup(STREAM_KEY, CONSUMER_GROUP)
+
+    // XADD the raw event to the stream (same format the HTTP ingest route uses)
+    await redis.xadd(
+      STREAM_KEY, '*',
+      'eventId', eventId,
+      'traceId', traceId,
+      'projectId', testTenant.projectId,
+      'tenantId', testTenant.tenantId,
+      'planId', testTenant.planId,
+      'type', 'log',
+      'severity', 'info',
+      'message', 'X1 stream consumer XACK test',
+      'fingerprint', 'x1-xack-fp',
+    )
+
+    // XREADGROUP — mimic what IngestConsumer does
+    const streamResults = await redis.xreadgroup(
+      'GROUP', CONSUMER_GROUP, 'test-x1-consumer',
+      'COUNT', 1,
+      'BLOCK', 500,
+      'STREAMS', STREAM_KEY, '>',
+    ) as Array<[string, Array<[string, string[]]>]> | null
+
+    expect(streamResults).not.toBeNull()
+    const [, messages] = streamResults![0]!
+    const [msgId, fields] = messages![0]!
+    expect(msgId).toBeDefined()
+
+    // The message should be in XPENDING before ACK
+    const pendingBefore = await redis.xpending(STREAM_KEY, CONSUMER_GROUP, msgId, msgId, 10) as unknown[]
+    expect(pendingBefore.length).toBeGreaterThan(0)
+
+    // Process using the ingestion service (what IngestConsumer.start() does)
+    const data: Record<string, string> = {}
+    for (let i = 0; i < fields.length - 1; i += 2) {
+      const k = fields[i]
+      const v = fields[i + 1]
+      if (k !== undefined && v !== undefined) data[k] = v
+    }
+    await container.ingestion.processEvent({
+      eventId: data['eventId'] ?? msgId,
+      traceId: data['traceId'] ?? '',
+      projectId: data['projectId'] ?? '',
+      tenantId: data['tenantId'] ?? '',
+      planId: data['planId'] ?? '',
+      raw: {
+        type: (data['type'] ?? 'log') as 'log',
+        severity: (data['severity'] ?? 'info') as 'info',
+        message: data['message'] ?? '',
+        fingerprint: data['fingerprint'],
+      },
+    })
+
+    // XACK the message (what IngestConsumer does after processEvent succeeds)
+    await redis.xack(STREAM_KEY, CONSUMER_GROUP, msgId)
+
+    // The message should no longer be in XPENDING
+    const pendingAfter = await redis.xpending(STREAM_KEY, CONSUMER_GROUP, msgId, msgId, 10) as unknown[]
+    expect(pendingAfter.length).toBe(0)
+
+    // And the event should have landed in MongoDB
+    const mongoDoc = await getMongoDb()
+      .collection('events')
+      .findOne({ _id: eventId } as unknown as import('mongodb').Filter<import('mongodb').Document>)
+    expect(mongoDoc).not.toBeNull()
+  }, 20_000)
 
   // -------------------------------------------------------------------------
   // Idempotency: same eventId twice must not double-count in PG

@@ -177,6 +177,42 @@ describe('P2: Row-Level Security', () => {
     }
   })
 
+  it('billing_events: tenant B cannot see tenant A billing rows under RLS', async () => {
+    const pool = getPgPool()
+    const tenantA = await createTestTenant()
+    const tenantB = await createTestTenant()
+
+    // Ensure the partition for current month exists
+    const now = new Date()
+    await pool.query('SELECT ensure_billing_partition($1, $2)', [now.getFullYear(), now.getMonth() + 1])
+
+    // Insert a billing event for tenant A (as superuser, bypassing RLS)
+    await pool.query(
+      `INSERT INTO billing_events (tenant_id, event_type, amount_cents, metadata, occurred_at)
+       VALUES ($1, 'charge', 1000, '{}', NOW())`,
+      [tenantA.tenantId],
+    )
+
+    // Attempt to read it as tenant B under RLS — must return 0 rows
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query('SET LOCAL ROLE app_user')
+      await client.query(`SET LOCAL "app.current_tenant_id" = '${sanitizeUuid(tenantB.tenantId)}'`)
+      const result = await client.query(
+        'SELECT id FROM billing_events WHERE tenant_id = $1',
+        [tenantA.tenantId],
+      )
+      expect(result.rows).toHaveLength(0)
+      await client.query('COMMIT')
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw err
+    } finally {
+      client.release()
+    }
+  })
+
   it('withTenant helper correctly scopes reads to its own tenant', async () => {
     const pool = getPgPool()
     const tenantA = await createTestTenant()

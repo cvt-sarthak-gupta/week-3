@@ -44,6 +44,9 @@ export interface TenantQuotaReportRow {
   eventQuotaPerMonth: number | null;
   eventsThisMonth: number;
   percentUsed: number;
+  rank: number;
+  exceeded80pct: boolean;
+  momGrowthPct: number | null;
 }
 
 export class TenantService {
@@ -226,31 +229,76 @@ export class TenantService {
   }
 
   async getAllTenantsQuotaReport(): Promise<TenantQuotaReportRow[]> {
+    const now = new Date();
+    const prevMonth = new Date(now);
+    prevMonth.setUTCMonth(prevMonth.getUTCMonth() - 1);
+
     const result = await this.pg.query<{
       tenant_id: string;
       tenant_name: string;
       plan_name: string | null;
       event_quota_per_month: number | null;
-      events_this_month: number;
+      this_month_events: string;
+      prev_month_events: string;
+      rank: string;
+      usage_pct: string;
+      exceeded_80pct: boolean;
+      mom_growth_pct: string | null;
     }>(
-      `SELECT
-         t.id                                     AS tenant_id,
-         t.name                                   AS tenant_name,
-         p.name                                   AS plan_name,
-         p.event_quota_per_month,
-         COALESCE(mu.event_count, 0)::int         AS events_this_month
-       FROM tenants t
-       LEFT JOIN plans p        ON p.id = t.plan_id
-       LEFT JOIN monthly_usage mu
-              ON mu.tenant_id = t.id
-             AND mu.year = EXTRACT(YEAR FROM NOW())
-             AND mu.month = EXTRACT(MONTH FROM NOW())
-       ORDER BY events_this_month DESC`,
+      `WITH month_agg AS (
+         SELECT tenant_id, SUM(event_count) AS this_month_events
+         FROM monthly_usage
+         WHERE year = $1 AND month = $2
+         GROUP BY tenant_id
+       ),
+       prev_month_agg AS (
+         SELECT tenant_id, SUM(event_count) AS prev_month_events
+         FROM monthly_usage
+         WHERE year = $3 AND month = $4
+         GROUP BY tenant_id
+       ),
+       ranked AS (
+         SELECT
+           t.id                                   AS tenant_id,
+           t.name                                 AS tenant_name,
+           p.name                                 AS plan_name,
+           p.event_quota_per_month,
+           COALESCE(m.this_month_events, 0)       AS this_month_events,
+           COALESCE(pm.prev_month_events, 0)      AS prev_month_events,
+           RANK() OVER (
+             ORDER BY COALESCE(m.this_month_events, 0) DESC
+           )                                      AS rank,
+           CASE WHEN p.event_quota_per_month > 0
+             THEN ROUND(
+               COALESCE(m.this_month_events, 0)::NUMERIC
+                 / p.event_quota_per_month * 100, 2)
+             ELSE 0
+           END                                    AS usage_pct,
+           COALESCE(m.this_month_events, 0)
+             > (p.event_quota_per_month * 0.8)    AS exceeded_80pct,
+           CASE WHEN COALESCE(pm.prev_month_events, 0) > 0
+             THEN ROUND(
+               (COALESCE(m.this_month_events, 0) - pm.prev_month_events)::NUMERIC
+                 / pm.prev_month_events * 100, 2)
+             ELSE NULL
+           END                                    AS mom_growth_pct
+         FROM tenants t
+         JOIN plans p ON p.id = t.plan_id
+         LEFT JOIN month_agg m         ON m.tenant_id  = t.id
+         LEFT JOIN prev_month_agg pm   ON pm.tenant_id = t.id
+       )
+       SELECT * FROM ranked ORDER BY rank`,
+      [
+        now.getUTCFullYear(),
+        now.getUTCMonth() + 1,
+        prevMonth.getUTCFullYear(),
+        prevMonth.getUTCMonth() + 1,
+      ],
     );
 
     return result.rows.map((row) => {
       const quota = row.event_quota_per_month;
-      const used = row.events_this_month;
+      const used = Number(row.this_month_events);
       const percent = quota !== null && quota > 0 ? Math.round((used / quota) * 100) : 0;
 
       return {
@@ -260,6 +308,9 @@ export class TenantService {
         eventQuotaPerMonth: quota,
         eventsThisMonth: used,
         percentUsed: percent,
+        rank: Number(row.rank),
+        exceeded80pct: row.exceeded_80pct,
+        momGrowthPct: row.mom_growth_pct !== null ? Number(row.mom_growth_pct) : null,
       };
     });
   }
