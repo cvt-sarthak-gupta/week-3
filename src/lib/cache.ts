@@ -75,8 +75,6 @@ export class CacheService {
       return JSON.parse(cached) as T;
     }
 
-    if (projectId) this.incrMiss(projectId);
-
     // 2. Try to acquire fill lock (stampede prevention)
     const ownerId = this.generateOwnerId();
     let locked = false;
@@ -85,19 +83,25 @@ export class CacheService {
     } catch {
       // Redis down — fall through to direct fetch
       logger.warn({ key }, 'cache: Redis lock failed (Redis down?) — fetching directly from source');
+      if (projectId) this.incrMiss(projectId);
       return fetcher();
     }
 
     if (locked) {
-      // We won the lock — fetch and populate
+      // We won the lock — fetch and populate.
+      // Count exactly one miss here: only the holder that actually goes to the
+      // source database is a true cache miss.  Concurrent waiters that poll and
+      // get the value from the filled cache are hits, not misses.
       try {
         // Double-check: another holder may have filled the cache just before
         // we acquired the lock.
         const rechecked = await this.redis.client.get(key).catch(() => null);
         if (rechecked !== null) {
+          if (projectId) this.incrHit(projectId);
           return JSON.parse(rechecked) as T;
         }
 
+        if (projectId) this.incrMiss(projectId);
         const value = await fetcher();
         await this.redis.client.setex(key, ttlSeconds, JSON.stringify(value)).catch(() => undefined);
         logger.debug({ key, ttlSeconds }, 'cache filled');
@@ -107,13 +111,15 @@ export class CacheService {
       }
     }
 
-    // 3. Someone else holds the lock — poll until the value appears
+    // 3. Someone else holds the lock — poll until the value appears.
+    //    Waiters that get the value from cache are counted as hits, not misses.
     const deadline = Date.now() + this.POLL_TIMEOUT_MS;
     while (Date.now() < deadline) {
       await new Promise<void>((resolve) => setTimeout(resolve, this.POLL_INTERVAL_MS));
 
       const polled = await this.redis.client.get(key).catch(() => null);
       if (polled !== null) {
+        if (projectId) this.incrHit(projectId);
         return JSON.parse(polled) as T;
       }
 
@@ -124,6 +130,7 @@ export class CacheService {
         const retryLocked = await this.acquireLock(key, ownerId).catch(() => false);
         if (retryLocked) {
           try {
+            if (projectId) this.incrMiss(projectId);
             const value = await fetcher();
             await this.redis.client.setex(key, ttlSeconds, JSON.stringify(value)).catch(() => undefined);
             return value;
@@ -139,6 +146,7 @@ export class CacheService {
       { key },
       'cache stampede poll timed out, fetching directly',
     );
+    if (projectId) this.incrMiss(projectId);
     return fetcher();
   }
 

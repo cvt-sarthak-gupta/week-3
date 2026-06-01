@@ -274,8 +274,10 @@ export class TenantService {
                  / p.event_quota_per_month * 100, 2)
              ELSE 0
            END                                    AS usage_pct,
-           COALESCE(m.this_month_events, 0)
-             > (p.event_quota_per_month * 0.8)    AS exceeded_80pct,
+           CASE WHEN p.event_quota_per_month > 0
+                THEN COALESCE(m.this_month_events, 0) > (p.event_quota_per_month * 0.8)
+                ELSE false
+           END                                    AS exceeded_80pct,
            CASE WHEN COALESCE(pm.prev_month_events, 0) > 0
              THEN ROUND(
                (COALESCE(m.this_month_events, 0) - pm.prev_month_events)::NUMERIC

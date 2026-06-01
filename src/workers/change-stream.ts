@@ -84,10 +84,21 @@ export class ChangeStreamWorker {
           clearInterval(this._renewalTimer);
           this._renewalTimer = null;
         }
-        // Release lock if we still hold it
-        await this.redis.client.del(LEADER_KEY).catch((err: unknown) => {
-          log.warn({ err }, 'Error releasing leader lock after watch loop exit');
-        });
+        // Release lock only if we still own it.  An unconditional DEL would evict
+        // a new leader that won the election while we were exiting (e.g. after a
+        // failed renewal set _holdsLock=false).  Lua compare-and-delete is atomic.
+        const luaConditionalDel = `
+          if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('DEL', KEYS[1])
+          else
+            return 0
+          end
+        `;
+        await this.redis.client
+          .eval(luaConditionalDel, 1, LEADER_KEY, this.nodeId)
+          .catch((err: unknown) => {
+            log.warn({ err }, 'Error releasing leader lock after watch loop exit');
+          });
       }
 
       // Brief pause before re-entering election loop

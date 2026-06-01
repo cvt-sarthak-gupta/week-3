@@ -129,39 +129,13 @@ export class AlertService {
       });
     }
 
-    // Update percolator: DELETE + re-index with merged query
-    if (updates.esQuery !== undefined || updates.notificationChannel !== undefined) {
-      // Fetch current state to merge
-      const pgResult = await this.pg.query<{
-        es_query: string;
-        notification_channel: string;
-      }>(
-        `SELECT es_query, notification_channel FROM alert_rules WHERE id = $1 AND project_id = $2`,
-        [id, projectId],
-      );
-      const row = pgResult.rows[0];
-      if (row !== undefined) {
-        await this.es.client.delete({ index: percolatorIndex, id }).catch(() => {
-          // Ignore if document doesn't exist
-        });
-        await this.es.client.index({
-          index: percolatorIndex,
-          id,
-          document: {
-            query: JSON.parse(row.es_query) as Record<string, unknown>,
-            projectId,
-            alertRuleId: id,
-            notificationChannel: row.notification_channel,
-          },
-          refresh: 'wait_for',
-        });
-      }
-    }
-
     logger.info({ alertRuleId: id, projectId, tenantId }, 'Alert rule updated');
 
-    // Fetch and return the updated rule
-    const result = await this.pg.query<{
+    // Fetch the current rule state inside RLS context (withTenant) so the
+    // superuser pool does not bypass FORCE ROW LEVEL SECURITY on alert_rules.
+    // This also returns the merged es_query / notificationChannel for the
+    // percolator upsert below.
+    type AlertRuleRow = {
       id: string;
       name: string;
       condition_type: string;
@@ -170,15 +144,36 @@ export class AlertService {
       notification_channel: string;
       is_enabled: boolean;
       es_query: string;
-    }>(
-      `SELECT id, name, condition_type, threshold, window_seconds, notification_channel, is_enabled, es_query
-       FROM alert_rules WHERE id = $1 AND project_id = $2`,
-      [id, projectId],
-    );
+    };
 
-    const row = result.rows[0];
+    const fetchResult = await this.pg.withTenant(tenantId, async (client) => {
+      return client.query<AlertRuleRow>(
+        `SELECT id, name, condition_type, threshold, window_seconds,
+                notification_channel, is_enabled, es_query
+         FROM alert_rules WHERE id = $1`,
+        [id],
+      );
+    });
+
+    const row = fetchResult.rows[0];
     if (row === undefined) {
       throw new Error(`updateAlertRule: alert rule ${id} not found after update`);
+    }
+
+    // Update percolator via a single index (upsert-by-id) — no delete+create gap
+    // where incoming events would silently miss the rule.
+    if (updates.esQuery !== undefined || updates.notificationChannel !== undefined) {
+      await this.es.client.index({
+        index: percolatorIndex,
+        id,
+        document: {
+          query: JSON.parse(row.es_query) as Record<string, unknown>,
+          projectId,
+          alertRuleId: id,
+          notificationChannel: row.notification_channel,
+        },
+        refresh: 'wait_for',
+      });
     }
 
     return {

@@ -104,25 +104,11 @@ export class IngestionService {
     year: number,
     month: number,
   ): Promise<void> {
-    // 1. Idempotency gate: INSERT INTO usage_dedup ON CONFLICT DO NOTHING
-    const dedupResult = await this.pg.query<{ event_id: string }>(
-      `
-      INSERT INTO usage_dedup (event_id, tenant_id)
-      VALUES ($1, $2)
-      ON CONFLICT (event_id) DO NOTHING
-      RETURNING event_id
-      `,
-      [eventId, tenantId],
-    );
-
-    // If 0 rows returned, this event was already counted — skip
-    if (dedupResult.rowCount === 0) {
-      logger.debug({ eventId, tenantId }, 'usage_dedup: duplicate event, skipping');
-      return;
-    }
-
-    // 2. Acquire advisory lock on the monthly_usage slot
-    // hashtext is a PG function returning int4 from a string
+    // The idempotency gate (usage_dedup) and the counter increment (monthly_usage)
+    // must be inside the same transaction as the advisory lock.  Moving dedup inside
+    // the lock prevents the bug where dedup commits but the counter never increments:
+    // if we exhaust retries and throw, dedup was never written so the retry queue
+    // job can succeed on the next attempt.
     const lockKey = `monthly_usage:${tenantId}:${year}:${month}`;
 
     for (let attempt = 1; attempt <= MAX_USAGE_RETRIES; attempt++) {
@@ -130,6 +116,7 @@ export class IngestionService {
       try {
         await client.query('BEGIN');
 
+        // 1. Try to acquire advisory lock on the monthly_usage slot.
         const lockResult = await client.query<{ acquired: boolean }>(
           `SELECT pg_try_advisory_xact_lock(hashtext($1)) AS acquired`,
           [lockKey],
@@ -139,21 +126,36 @@ export class IngestionService {
 
         if (!acquired) {
           await client.query('ROLLBACK');
-          // Exponential backoff + jitter
+          // Exponential backoff + jitter before next attempt.
           const delay = Math.min(50 * Math.pow(2, attempt - 1), 500);
           const jitter = Math.floor(Math.random() * 50);
           await new Promise<void>((resolve) => setTimeout(resolve, delay + jitter));
           continue;
         }
 
-        // 3. Upsert the monthly_usage counter
+        // 2. Idempotency gate: only write if this event hasn't been counted yet.
+        //    Runs inside the lock so that dedup and the counter update are atomic.
+        const dedupResult = await client.query<{ event_id: string }>(
+          `INSERT INTO usage_dedup (event_id, tenant_id)
+           VALUES ($1, $2)
+           ON CONFLICT (event_id) DO NOTHING
+           RETURNING event_id`,
+          [eventId, tenantId],
+        );
+
+        if ((dedupResult.rowCount ?? 0) === 0) {
+          // Already counted — release the lock and exit cleanly.
+          await client.query('ROLLBACK');
+          logger.debug({ eventId, tenantId }, 'usage_dedup: duplicate event, skipping');
+          return;
+        }
+
+        // 3. Upsert the monthly_usage counter.
         await client.query(
-          `
-          INSERT INTO monthly_usage (tenant_id, year, month, event_count)
-          VALUES ($1, $2, $3, 1)
-          ON CONFLICT (tenant_id, year, month)
-          DO UPDATE SET event_count = monthly_usage.event_count + 1
-          `,
+          `INSERT INTO monthly_usage (tenant_id, year, month, event_count)
+           VALUES ($1, $2, $3, 1)
+           ON CONFLICT (tenant_id, year, month)
+           DO UPDATE SET event_count = monthly_usage.event_count + 1`,
           [tenantId, year, month],
         );
 
@@ -167,9 +169,12 @@ export class IngestionService {
       }
     }
 
-    logger.error(
-      { tenantId, eventId, year, month, maxRetries: MAX_USAGE_RETRIES },
-      'upsertMonthlyUsage: failed to acquire advisory lock after max retries',
+    // All retries exhausted — throw so the pg-usage stage in processEvent pushes
+    // the eventId to the retry queue.  Because dedup was never committed, a future
+    // retry will be able to count this event correctly.
+    throw new Error(
+      `upsertMonthlyUsage: failed to acquire advisory lock after ${MAX_USAGE_RETRIES} retries ` +
+      `(tenantId=${tenantId}, eventId=${eventId}, year=${year}, month=${month})`,
     );
   }
 
@@ -350,12 +355,17 @@ export class IngestionService {
             // fires the matched rules via its dedup-fire lock mechanism.
             // Use PUBLISH (Pub/Sub) not XADD (stream) so messages are not accumulated
             // without a consumer.
+            // Include _matchedRuleIds so the subscriber can skip a redundant ES
+            // percolation call (fatal events otherwise trigger 3 total calls:
+            // here + change-stream publish + subscriber re-percolation).
             const channel = `alerts:fatal:${projectId}`;
+            const matchedRuleIds = hits.map((h) => h._id).filter(Boolean);
             await this.redis.client.publish(channel, JSON.stringify({
               ...doc,
               // occurredAt/ingestedAt must be strings so JSON.parse in the subscriber works
               occurredAt: doc.occurredAt.toISOString(),
               ingestedAt: doc.ingestedAt.toISOString(),
+              _matchedRuleIds: matchedRuleIds,
             }));
             logger.info(
               { eventId, matchCount: hits.length, projectId, channel },

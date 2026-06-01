@@ -203,6 +203,16 @@ export class AlertSubscriber {
         ? eventDoc['_id']
         : String(eventDoc['_id'] ?? '');
 
+    // The ingestion pipeline already ran percolation and embeds the matched rule
+    // IDs in the publish payload (_matchedRuleIds).  Re-use them when present to
+    // avoid a redundant ES percolation call (fatal events otherwise trigger 3
+    // total percolation calls: ingestion + change-stream + subscriber).
+    const embeddedRuleIds = Array.isArray(eventDoc['_matchedRuleIds'])
+      ? (eventDoc['_matchedRuleIds'] as unknown[]).filter(
+          (id): id is string => typeof id === 'string' && id.length > 0,
+        )
+      : null;
+
     // Convert tags from MongoDB format (Record<string,string>) to ES nested
     // format ([{key, value}]) so the percolation query evaluates correctly.
     const rawTags = eventDoc['tags'];
@@ -219,13 +229,18 @@ export class AlertSubscriber {
       ...(tagsForEs !== undefined ? { tags: tagsForEs } : {}),
     };
 
-    // Run percolation to find which rules actually match this event.
+    // Run percolation only when the publisher did not already supply matched IDs.
     let matchedRuleIds: string[];
-    try {
-      matchedRuleIds = await this.alerts.runPercolation(projectId, esEventDoc);
-    } catch (esErr) {
-      log.warn({ err: esErr, projectId, eventId }, 'Percolation failed — skipping alert fan-out');
-      return;
+    if (embeddedRuleIds !== null) {
+      matchedRuleIds = embeddedRuleIds;
+      log.debug({ projectId, eventId, count: matchedRuleIds.length }, 'Using embedded rule IDs from publisher (skipping ES percolation)');
+    } else {
+      try {
+        matchedRuleIds = await this.alerts.runPercolation(projectId, esEventDoc);
+      } catch (esErr) {
+        log.warn({ err: esErr, projectId, eventId }, 'Percolation failed — skipping alert fan-out');
+        return;
+      }
     }
 
     if (matchedRuleIds.length === 0) {
@@ -233,7 +248,8 @@ export class AlertSubscriber {
       return;
     }
 
-    // Fetch notification channels for matched rules only (not all enabled rules).
+    // Fetch notification channels for matched rules, scoped to projectId so that
+    // a forged Redis publish cannot pull in rules from another project/tenant.
     let ruleRows: Array<{ id: string; notification_channel: string }>;
     try {
       const placeholders = matchedRuleIds.map((_, i) => `$${i + 1}`).join(',');
@@ -241,8 +257,9 @@ export class AlertSubscriber {
         `SELECT id, notification_channel
            FROM alert_rules
           WHERE id IN (${placeholders})
-            AND is_enabled = true`,
-        matchedRuleIds,
+            AND is_enabled = true
+            AND project_id = $${matchedRuleIds.length + 1}`,
+        [...matchedRuleIds, projectId],
       );
       ruleRows = pgResult.rows;
     } catch (pgErr: unknown) {
