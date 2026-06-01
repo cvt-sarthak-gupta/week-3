@@ -56,6 +56,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # .env.test is committed and contains all test credentials (localhost ports,
+      # fake JWT secret). Copying it to .env lets the migrate script work — it
+      # uses `node --env-file=.env` which requires the file to exist.
+      - name: Prepare environment
+        run: cp .env.test .env
+
       - name: Start test services
         run: docker compose -f docker-compose.test.yml up -d
 
@@ -97,43 +103,10 @@ jobs:
 
       - name: Run migrations
         run: npm run migrate
-        env:
-          NODE_ENV: test
-          PG_HOST: localhost
-          PG_PORT: 5433
-          PG_DATABASE: pulseboard_test
-          PG_USER: postgres
-          PG_PASSWORD: postgres
-          MONGO_URL: mongodb://localhost:27018/?directConnection=true
-          MONGO_DB_NAME: pulseboard_test
-          ES_URL: http://localhost:9201
-          REDIS_HOST: localhost
-          REDIS_PORT: 6380
-          JWT_SECRET: test-secret-for-pulseboard-tests-ok
-          JWT_EXPIRY: 1h
-          JWT_REFRESH_EXPIRY: 7d
 
       - name: Run integration tests
         run: npm run test:integration
         env:
-          NODE_ENV: test
-          PG_HOST: localhost
-          PG_PORT: 5433
-          PG_DATABASE: pulseboard_test
-          PG_USER: postgres
-          PG_PASSWORD: postgres
-          PG_POOL_MIN: 1
-          PG_POOL_MAX: 5
-          MONGO_URL: mongodb://localhost:27018/?directConnection=true
-          TEST_MONGO_URL: mongodb://localhost:27018/?directConnection=true
-          MONGO_DB_NAME: pulseboard_test
-          TEST_MONGO_DB: pulseboard_test
-          ES_URL: http://localhost:9201
-          REDIS_HOST: localhost
-          REDIS_PORT: 6380
-          JWT_SECRET: test-secret-for-pulseboard-tests-ok
-          JWT_EXPIRY: 1h
-          JWT_REFRESH_EXPIRY: 7d
           SKIP_DOCKER_DEGRADATION: 1
 
       - name: Stop test services
