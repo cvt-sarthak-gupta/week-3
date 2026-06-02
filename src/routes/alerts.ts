@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import fp from 'fastify-plugin';
 import { AppContainer } from '../container.js';
-import { ForbiddenError, NotFoundError } from '../errors.js';
+import { ForbiddenError, NotFoundError, ValidationError } from '../errors.js';
+import { AlertRuleSchema } from '../schemas/alert.js';
 
 interface ProjectParams {
   tenantId: string;
@@ -118,18 +119,24 @@ export function alertRoutes(container: AppContainer): FastifyPluginAsync {
         await assertMember(userId, tenantId);
         await assertProjectBelongsToTenant(projectId, tenantId);
 
+        // Parse through AlertRuleSchema to enforce SSRF-safe URL validation.
+        const ruleParseResult = AlertRuleSchema.safeParse({
+          name: request.body.name,
+          conditionType: request.body.conditionType,
+          threshold: request.body.threshold,
+          windowSeconds: request.body.windowSeconds ?? 300,
+          notificationChannel: request.body.notificationChannel,
+          isEnabled: request.body.isEnabled ?? true,
+          esQuery: request.body.esQuery ?? {},
+        });
+        if (!ruleParseResult.success) {
+          throw new ValidationError(ruleParseResult.error.errors.map((e) => e.message).join('; '));
+        }
+
         const created = await container.alerts.createAlertRule({
           projectId,
           tenantId,
-          rule: {
-            name: request.body.name,
-            conditionType: request.body.conditionType,
-            threshold: request.body.threshold,
-            windowSeconds: request.body.windowSeconds ?? 300,
-            notificationChannel: request.body.notificationChannel,
-            isEnabled: request.body.isEnabled ?? true,
-            esQuery: request.body.esQuery ?? {},
-          },
+          rule: ruleParseResult.data,
         });
 
         void reply.status(201).send({ alertRuleId: created.id });
@@ -172,6 +179,15 @@ export function alertRoutes(container: AppContainer): FastifyPluginAsync {
         await assertProjectBelongsToTenant(projectId, tenantId);
 
         const { name, conditionType, threshold, windowSeconds, notificationChannel, isEnabled, esQuery } = request.body;
+
+        // Validate notificationChannel through Zod when present to enforce SSRF-safe URL check.
+        if (notificationChannel !== undefined) {
+          const channelCheck = AlertRuleSchema.shape.notificationChannel.safeParse(notificationChannel);
+          if (!channelCheck.success) {
+            throw new ValidationError(channelCheck.error.errors.map((e) => e.message).join('; '));
+          }
+        }
+
         const updates: Parameters<typeof container.alerts.updateAlertRule>[2]['updates'] = {};
         if (name !== undefined) updates.name = name;
         if (conditionType !== undefined) updates.conditionType = conditionType;

@@ -149,7 +149,7 @@ export class AlertService {
     const fetchResult = await this.pg.withTenant(tenantId, async (client) => {
       return client.query<AlertRuleRow>(
         `SELECT id, name, condition_type, threshold, window_seconds,
-                notification_channel, is_enabled, es_query
+                notification_channel, is_enabled, es_query::text AS es_query
          FROM alert_rules WHERE id = $1`,
         [id],
       );
@@ -220,7 +220,7 @@ export class AlertService {
         is_enabled: boolean;
         es_query: string;
       }>(
-        `SELECT id, name, condition_type, threshold, window_seconds, notification_channel, is_enabled, es_query
+        `SELECT id, name, condition_type, threshold, window_seconds, notification_channel, is_enabled, es_query::text AS es_query
          FROM alert_rules WHERE project_id = $1 ORDER BY created_at DESC`,
         [projectId],
       );
