@@ -31,6 +31,9 @@ async function build(container: AppContainer): Promise<ReturnType<typeof Fastify
   const fastify = Fastify({
     logger: false, // We use our own pino instance
     trustProxy: true,
+    // Explicit body limit — Fastify default is 1 MB but we set it clearly so
+    // any future increase requires a deliberate decision.
+    bodyLimit: 1_048_576, // 1 MiB
   });
 
   // -------------------------------------------------------------------------

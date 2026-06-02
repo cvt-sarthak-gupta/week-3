@@ -65,6 +65,19 @@ export function searchRoutes(container: AppContainer): FastifyPluginAsync {
       void container.redis.client.set(cacheKey, '1', 'EX', MEMBER_CACHE_TTL_SECONDS).catch(() => {});
     }
 
+    async function assertProjectBelongsToTenant(projectId: string, tenantId: string): Promise<void> {
+      // assertMember confirms the user belongs to the tenant, but without this
+      // check a user can supply any projectId UUID and read logs from a project
+      // in a completely different tenant. RLS does not protect ES queries.
+      const result = await container.pg.query<{ id: string }>(
+        'SELECT id FROM projects WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [projectId, tenantId],
+      );
+      if (result.rows[0] === undefined) {
+        throw new ForbiddenError('Project not found in this tenant');
+      }
+    }
+
     fastify.get<{ Params: ProjectSearchParams; Querystring: SearchQuerystring }>(
       '/tenants/:tenantId/projects/:projectId/logs/search',
       {
@@ -96,6 +109,7 @@ export function searchRoutes(container: AppContainer): FastifyPluginAsync {
         const userId = request.user.userId;
 
         await assertMember(userId, tenantId);
+        await assertProjectBelongsToTenant(projectId, tenantId);
 
         const { q, severity, from, to, cursor, limit = 20 } = request.query;
         const pageSize = Math.min(limit, 100);
@@ -105,9 +119,12 @@ export function searchRoutes(container: AppContainer): FastifyPluginAsync {
         const mustClauses: EsQuery[] = [];
         const filterClauses: EsQuery[] = [];
         const shouldClauses: EsQuery[] = [];
-        const mustNotClauses: EsQuery[] = [
-          { term: { severity: 'debug' } },
-        ];
+        // Exclude debug by default. When the caller explicitly requests
+        // severity=debug we must NOT add this exclusion — it would conflict
+        // with the filter clause below and return zero results.
+        const mustNotClauses: EsQuery[] = severity !== 'debug'
+          ? [{ term: { severity: 'debug' } }]
+          : [];
 
         // Full-text search on message + stackTrace
         if (q !== undefined && q.length > 0) {

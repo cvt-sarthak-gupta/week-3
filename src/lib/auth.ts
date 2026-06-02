@@ -88,15 +88,12 @@ export class AuthService {
         throw new AuthError('Invalid or expired access token');
       }
 
-      // Guard: ensure the decoded payload has the fields we require.
-      // jwtVerify<UserTokenPayload>() sets request.user; validate the shape.
+      // Guard: userId and email are always required. tenantId and role start null
+      // for newly registered users who have not yet been onboarded to any tenant,
+      // so we allow null/empty for those fields here and enforce them per-route
+      // where tenant membership is actually required.
       const u = request.user;
-      if (
-        typeof u.userId !== 'string' ||
-        typeof u.tenantId !== 'string' ||
-        typeof u.email !== 'string' ||
-        typeof u.role !== 'string'
-      ) {
+      if (typeof u.userId !== 'string' || typeof u.email !== 'string') {
         throw new AuthError('Malformed token payload');
       }
     };

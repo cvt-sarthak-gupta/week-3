@@ -27,24 +27,35 @@ interface EventBody {
   fingerprint?: string;
 }
 
-const tenantPlanCache = new Map<string, { planId: string | null; cachedAt: number }>();
-const TENANT_PLAN_CACHE_TTL_MS = 5 * 60 * 1000;
+// No module-level Map cache here — an in-process Map breaks under horizontal
+// scaling because each API instance has its own copy and plan changes are only
+// reflected after the local TTL expires. All caching goes through Redis instead.
+const TENANT_PLAN_CACHE_TTL_SECONDS = 300;
 
 export function ingestRoutes(container: AppContainer): FastifyPluginAsync {
   return fp(async (fastify) => {
     const apiKeyPreHandler = container.auth.apiKeyPreHandler();
 
     async function getTenantPlanId(tenantId: string): Promise<string | null> {
-      const cached = tenantPlanCache.get(tenantId);
-      if (cached !== undefined && Date.now() - cached.cachedAt < TENANT_PLAN_CACHE_TTL_MS) {
-        return cached.planId;
-      }
+      const cacheKey = `tenant:plan:${tenantId}`;
+
+      // 1. Redis hit — shared across all API instances
+      const cached = await container.redis.client.get(cacheKey).catch(() => null);
+      if (cached !== null) return cached === '' ? null : cached;
+
+      // 2. PG fallback
       const result = await container.pg.query<{ plan_id: string | null }>(
         'SELECT plan_id FROM tenants WHERE id = $1 LIMIT 1',
         [tenantId],
       );
       const planId = result.rows[0]?.plan_id ?? null;
-      tenantPlanCache.set(tenantId, { planId, cachedAt: Date.now() });
+
+      // Store in Redis; use empty string to represent NULL so we can distinguish
+      // a cache miss from a tenant with no plan.
+      await container.redis.client
+        .setex(cacheKey, TENANT_PLAN_CACHE_TTL_SECONDS, planId ?? '')
+        .catch(() => {});
+
       return planId;
     }
 

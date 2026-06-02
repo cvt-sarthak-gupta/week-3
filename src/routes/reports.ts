@@ -33,13 +33,26 @@ export function reportRoutes(container: AppContainer): FastifyPluginAsync {
       return member;
     }
 
+    async function assertProjectBelongsToTenant(projectId: string, tenantId: string): Promise<void> {
+      const result = await container.pg.query<{ id: string }>(
+        'SELECT id FROM projects WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [projectId, tenantId],
+      );
+      if (result.rows[0] === undefined) {
+        throw new ForbiddenError('Project not found in this tenant');
+      }
+    }
+
     async function assertAdmin(userId: string): Promise<void> {
-      const result = await container.pg.query<{ role: string }>(
-        `SELECT role FROM tenant_members WHERE user_id = $1 AND role IN ('owner','admin') LIMIT 1`,
+      // Platform-level endpoints require is_platform_admin=true on the users row.
+      // Checking tenant_members.role would allow any tenant owner/admin to reach
+      // cross-tenant data, which is a privilege escalation.
+      const result = await container.pg.query<{ is_platform_admin: boolean }>(
+        `SELECT is_platform_admin FROM users WHERE id = $1 AND is_platform_admin = true LIMIT 1`,
         [userId],
       );
       if (result.rows[0] === undefined) {
-        throw new ForbiddenError('Admin access required');
+        throw new ForbiddenError('Platform admin access required');
       }
     }
 
@@ -70,6 +83,7 @@ export function reportRoutes(container: AppContainer): FastifyPluginAsync {
         const days = request.query.days ?? 7;
 
         await assertMember(userId, tenantId);
+        await assertProjectBelongsToTenant(projectId, tenantId);
 
         // ReportService.getErrorIntelligenceReport already caches with the key
         // 'report:error-intelligence:{projectId}:{days}' and handles invalidation
@@ -101,6 +115,7 @@ export function reportRoutes(container: AppContainer): FastifyPluginAsync {
         const userId = request.user.userId;
 
         await assertMember(userId, tenantId);
+        await assertProjectBelongsToTenant(projectId, tenantId);
 
         // ReportService.getDashboardReport caches with key 'report:dashboard:{projectId}'.
         // Wrapping again with a different key would bypass invalidation.

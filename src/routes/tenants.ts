@@ -22,7 +22,7 @@ interface MemberRow {
 interface CreateTenantBody {
   tenantName: string;
   tenantSlug: string;
-  planId?: string;
+  planId: string;  // required — plan_id is NOT NULL in DB
   projectName: string;
   projectSlug?: string;
 }
@@ -60,11 +60,15 @@ export function tenantRoutes(container: AppContainer): FastifyPluginAsync {
           tags: ['tenants'],
           body: {
             type: 'object',
-            required: ['tenantName', 'tenantSlug', 'projectName'],
+            required: ['tenantName', 'tenantSlug', 'planId', 'projectName'],
             properties: {
               tenantName: { type: 'string', minLength: 1 },
               tenantSlug: { type: 'string', minLength: 1, pattern: '^[a-z0-9-]+$' },
-              planId: { type: 'string' },
+              planId: {
+                type: 'string',
+                pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+                description: 'UUID of an existing plan — required (plan_id is NOT NULL in DB)',
+              },
               projectName: { type: 'string', minLength: 1 },
               projectSlug: { type: 'string', minLength: 1, pattern: '^[a-z0-9-]+$' },
             },
@@ -78,7 +82,7 @@ export function tenantRoutes(container: AppContainer): FastifyPluginAsync {
         const result = await container.tenants.onboardTenant({
           tenantName,
           tenantSlug,
-          planId: planId ?? '',
+          planId,
           projectName,
           projectSlug: projectSlug ?? tenantSlug,
           userId,

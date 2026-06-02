@@ -124,9 +124,19 @@ export function projectRoutes(container: AppContainer): FastifyPluginAsync {
           throw new Error('Failed to create project');
         }
 
-        await container.es.applyPolicyForProject(project.id, 30).catch((err) => {
-          logger.warn({ err, projectId: project.id }, 'Failed to create ES index for new project');
-        });
+        try {
+          await container.es.applyPolicyForProject(project.id, 30);
+        } catch (esErr) {
+          // ES setup failed after the PG row was committed. Roll back the PG row
+          // so the client cannot use an API key that points at an ES-less project.
+          logger.error({ err: esErr, projectId: project.id }, 'ES index setup failed — rolling back project');
+          await container.pg.withTenant(tenantId, async (client) => {
+            await client.query('DELETE FROM projects WHERE id = $1', [project.id]);
+          }).catch((pgErr) => {
+            logger.error({ err: pgErr, projectId: project.id }, 'Compensation DELETE failed — manual cleanup required');
+          });
+          throw esErr;
+        }
 
         void reply.status(201).send({ id: project.id, apiKey: project.api_key });
       },

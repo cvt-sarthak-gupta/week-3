@@ -252,11 +252,23 @@ export class IngestionService {
           const tagsForEs = _mongoTags !== undefined
             ? Object.entries(_mongoTags).map(([key, value]) => ({ key, value }))
             : undefined;
+          // ES maps stackTrace as `text` (a searchable string), but EventDocument
+          // stores it as StackFrame[]. Serialize to a readable format before indexing
+          // so ES can parse the document. Without this, any event with a stackTrace
+          // throws document_parsing_exception and is silently dropped from ES.
+          const { stackTrace: stackFrames, ...docWithoutStack } = docForEsBase;
+          const stackTraceText = stackFrames !== undefined
+            ? (stackFrames as StackFrame[]).map((f) =>
+                `  at ${f.function ?? '<anonymous>'} (${f.file ?? '<unknown>'}:${f.line ?? 0}:${f.column ?? 0})`
+              ).join('\n')
+            : undefined;
+
           await this.es.client.index({
             index: idx,
             id: eventId,
             document: {
-              ...docForEsBase,
+              ...docWithoutStack,
+              ...(stackTraceText !== undefined ? { stackTrace: stackTraceText } : {}),
               ...(tagsForEs !== undefined ? { tags: tagsForEs } : {}),
               occurredAt: doc.occurredAt.toISOString(),
               ingestedAt: doc.ingestedAt.toISOString(),

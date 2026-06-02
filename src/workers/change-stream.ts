@@ -217,6 +217,11 @@ export class ChangeStreamWorker {
         log.warn({ nodeId: this.nodeId }, 'Change stream invalidated — will re-open with no resume token');
         await this.redis.client.hdel(RESUME_HASH_KEY, 'token').catch(() => undefined);
       } else {
+        // Non-invalidation error (network drop, topology change, etc.). Clear the
+        // resume token so the next startup doesn't attempt to resume from a position
+        // that may no longer be in the oplog, which would cause repeated errors.
+        log.error({ err, nodeId: this.nodeId }, 'Change stream unexpected error — clearing resume token before re-throw');
+        await this.redis.client.hdel(RESUME_HASH_KEY, 'token').catch(() => undefined);
         throw err;
       }
     } finally {

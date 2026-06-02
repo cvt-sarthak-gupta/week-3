@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import type { PostgresDatabase } from '../db/postgres.js';
 import type { AlertService } from '../domain/alerts.js';
 import { createWorkerLogger } from '../logger.js';
+import { safeWebhookUrl } from '../schemas/alert.js';
 
 const log = createWorkerLogger('alert-subscriber');
 
@@ -142,6 +143,18 @@ export class AlertSubscriber {
       );
 
       for (const rule of result.rows) {
+        // Re-validate the webhook URL even on the fallback path. The create/update
+        // API validates at write time, but a stale or manually-inserted URL could
+        // bypass that gate. Skipping validation here would allow SSRF on the
+        // degradation path — exactly when defences are most likely to be missed.
+        if (!safeWebhookUrl(rule.notification_channel)) {
+          log.error(
+            { alertRuleId: rule.id, channel: rule.notification_channel },
+            'X5 PG fallback: skipping rule — notification_channel failed SSRF validation',
+          );
+          continue;
+        }
+
         try {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);

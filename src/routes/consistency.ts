@@ -8,12 +8,15 @@ export function consistencyRoutes(container: AppContainer): FastifyPluginAsync {
     const userPreHandler = container.auth.userPreHandler();
 
     async function assertAdmin(userId: string): Promise<void> {
-      const result = await container.pg.query<{ role: string }>(
-        `SELECT role FROM tenant_members WHERE user_id = $1 AND role IN ('owner','admin') LIMIT 1`,
+      // Platform-level endpoints require is_platform_admin=true on the users row.
+      // Checking tenant_members.role would allow any tenant owner/admin to reach
+      // cross-tenant data, which is a privilege escalation.
+      const result = await container.pg.query<{ is_platform_admin: boolean }>(
+        `SELECT is_platform_admin FROM users WHERE id = $1 AND is_platform_admin = true LIMIT 1`,
         [userId],
       );
       if (result.rows[0] === undefined) {
-        throw new ForbiddenError('Admin access required');
+        throw new ForbiddenError('Platform admin access required');
       }
     }
 

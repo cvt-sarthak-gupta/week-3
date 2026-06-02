@@ -182,10 +182,11 @@ export class ProjectService {
         retention_days: number;
       }>(
         `
-        INSERT INTO projects (tenant_id, name, api_key, is_archived)
+        INSERT INTO projects (tenant_id, name, slug, api_key, is_archived)
         VALUES (
           $1,
           $2,
+          $3,
           gen_random_uuid()::text,
           false
         )
@@ -194,7 +195,7 @@ export class ProjectService {
           tenant_id,
           api_key::text
         `,
-        [tenantId, data['name'] ?? null],
+        [tenantId, data['name'] ?? null, data['slug'] ?? null],
       );
 
       const row = result.rows[0];
@@ -245,7 +246,18 @@ export class ProjectService {
    */
   async rotateApiKey(projectId: string, tenantId: string): Promise<string> {
     return this.pg.withTenant(tenantId, async (client) => {
-      const result = await client.query<{ old_key: string; new_key: string }>(
+      // Fetch the old key first — RETURNING subqueries run after the UPDATE so they
+      // would return the new value, not the original one.
+      const oldResult = await client.query<{ api_key: string }>(
+        `SELECT api_key::text FROM projects WHERE id = $1 AND tenant_id = $2 AND is_archived = false`,
+        [projectId, tenantId],
+      );
+      if (oldResult.rows[0] === undefined) {
+        throw new NotFoundError(`Project not found: ${projectId}`);
+      }
+      const oldKey = oldResult.rows[0].api_key;
+
+      const result = await client.query<{ new_key: string }>(
         `
         UPDATE projects
         SET
@@ -255,7 +267,6 @@ export class ProjectService {
           AND tenant_id = $2
           AND is_archived = false
         RETURNING
-          (SELECT api_key::text FROM projects WHERE id = $1) AS old_key,
           api_key::text AS new_key
         `,
         [projectId, tenantId],
@@ -266,10 +277,7 @@ export class ProjectService {
         throw new NotFoundError(`Project not found: ${projectId}`);
       }
 
-      if (row.old_key) {
-        await this.invalidateApiKeyCache(row.old_key);
-      }
-
+      await this.invalidateApiKeyCache(oldKey);
       logger.debug({ tenantId, projectId }, 'api key rotated');
       return row.new_key;
     });
@@ -293,7 +301,7 @@ export class ProjectService {
     const result = await this.pg.query<{ role: string }>(
       `
       SELECT role
-      FROM tenant_memberships
+      FROM tenant_members
       WHERE tenant_id = $1
         AND user_id   = $2
       LIMIT 1

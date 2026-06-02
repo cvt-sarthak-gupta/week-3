@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { AppContainer } from '../container.js';
-import { AuthError, ConflictError, ValidationError } from '../errors.js';
+import { AuthError, ConflictError, ValidationError, RateLimitError } from '../errors.js';
 
 const scryptAsync = promisify(scrypt);
 const SCRYPT_KEY_LEN = 64;
@@ -47,6 +47,12 @@ interface RefreshBody {
   refreshToken: string;
 }
 
+// Auth endpoints are not behind apiKeyPreHandler but still need brute-force protection.
+// Login: 10 attempts per IP per minute. Register: 5 per IP per minute.
+// Uses the same Redis sliding-window Lua script as ingest rate limiting.
+const LOGIN_RL    = { windowMs: 60_000, maxRequests: 10 };
+const REGISTER_RL = { windowMs: 60_000, maxRequests: 5  };
+
 export function authRoutes(container: AppContainer): FastifyPluginAsync {
   return fp(async (fastify) => {
     fastify.post(
@@ -66,6 +72,13 @@ export function authRoutes(container: AppContainer): FastifyPluginAsync {
         },
       },
       async (request: FastifyRequest<{ Body: RegisterBody }>, reply: FastifyReply): Promise<void> => {
+        const rl = await container.rateLimit.checkRateLimit(`register:${request.ip}`, REGISTER_RL);
+        if (!rl.allowed) {
+          const retryAfter = Math.ceil((rl.resetAt - Date.now()) / 1000);
+          void reply.header('Retry-After', String(retryAfter));
+          throw new RateLimitError('Too many registration attempts — try again later', retryAfter);
+        }
+
         const { email, password, fullName } = request.body;
 
         const existing = await container.pg.query<{ id: string }>(
@@ -114,6 +127,13 @@ export function authRoutes(container: AppContainer): FastifyPluginAsync {
         },
       },
       async (request: FastifyRequest<{ Body: LoginBody }>, reply: FastifyReply): Promise<void> => {
+        const rl = await container.rateLimit.checkRateLimit(`login:${request.ip}`, LOGIN_RL);
+        if (!rl.allowed) {
+          const retryAfter = Math.ceil((rl.resetAt - Date.now()) / 1000);
+          void reply.header('Retry-After', String(retryAfter));
+          throw new RateLimitError('Too many login attempts — try again later', retryAfter);
+        }
+
         const { email, password } = request.body;
 
         const result = await container.pg.query<UserRow>(

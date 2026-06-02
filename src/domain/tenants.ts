@@ -29,21 +29,26 @@ export class TenantService {
   ) {}
 
   private async deletePgRows(tenantId: string, projectId: string): Promise<void> {
+    // Compensation must be atomic: if any DELETE fails we must roll back the
+    // others so the database does not end up with orphaned rows (e.g. a project
+    // row with no parent tenant). Without BEGIN/COMMIT each statement commits
+    // independently and a mid-way failure leaves partial state.
+    const client = await this.pg.connect();
     try {
-      const client = await this.pg.connect();
-      try {
-        await client.query(`DELETE FROM tenant_members WHERE tenant_id = $1`, [tenantId]);
-        await client.query(`DELETE FROM monthly_usage WHERE tenant_id = $1`, [tenantId]);
-        await client.query(`DELETE FROM projects WHERE id = $1`, [projectId]);
-        await client.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]);
-      } finally {
-        client.release();
-      }
+      await client.query('BEGIN');
+      await client.query(`DELETE FROM tenant_members WHERE tenant_id = $1`, [tenantId]);
+      await client.query(`DELETE FROM monthly_usage  WHERE tenant_id = $1`, [tenantId]);
+      await client.query(`DELETE FROM projects        WHERE id = $1`,        [projectId]);
+      await client.query(`DELETE FROM tenants         WHERE id = $1`,        [tenantId]);
+      await client.query('COMMIT');
     } catch (compensationErr) {
+      await client.query('ROLLBACK').catch(() => undefined);
       logger.error(
         { err: compensationErr, tenantId, projectId },
         'onboardTenant: compensation delete of PG rows failed — manual cleanup required',
       );
+    } finally {
+      client.release();
     }
   }
 

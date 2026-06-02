@@ -6,6 +6,7 @@ import type { ElasticsearchDatabase } from '../db/elastic.js';
 import { percolatorIndex } from '../db/elastic.js';
 import type { RedisDatabase } from '../db/redis.js';
 import type { AlertRule, CreateAlertRuleInput, UpdateAlertRuleInput } from '../types/alerts.js';
+import { safeWebhookUrl } from '../schemas/alert.js';
 
 export type { AlertRule, CreateAlertRuleInput, UpdateAlertRuleInput };
 
@@ -280,7 +281,14 @@ export class AlertService {
       return false;
     }
 
-    // 3. Won the lock — fire the webhook
+    // 3. Won the lock — validate the URL before firing to guard against SSRF
+    // (the Zod schema covers the write path; this re-validates at fire time in
+    // case the stored value was written outside the normal API path).
+    if (!safeWebhookUrl(channel)) {
+      logger.error({ alertRuleId, channel }, 'fireDedupAlert: channel URL failed SSRF validation — skipping');
+      return false;
+    }
+
     let webhookSucceeded = false;
     try {
       logger.info(

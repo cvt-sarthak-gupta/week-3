@@ -47,8 +47,12 @@ export class PostgresDatabase {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      // SET LOCAL does not accept parameterized values in PostgreSQL; validate UUID format
-      // before interpolating to prevent SQL injection.
+      // PostgreSQL SET LOCAL does not accept $1 placeholders — it is a GUC
+      // assignment, not a DML statement, so the protocol-level parameterization
+      // path is unavailable. We use string interpolation here, which is safe
+      // ONLY because we validate the UUID format immediately before interpolating.
+      // The regex accepts only hex digits and hyphens in the exact UUID layout,
+      // so no SQL metacharacters (quotes, semicolons, etc.) can pass through.
       const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRe.test(tenantId)) throw new Error(`withTenant: invalid tenantId: ${tenantId}`);
       // Switch to the non-superuser role so RLS policies are actually enforced.

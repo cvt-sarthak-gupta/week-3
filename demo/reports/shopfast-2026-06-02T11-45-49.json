@@ -1,0 +1,159 @@
+{
+  "generatedAt": "2026-06-02T11:45:49.365Z",
+  "tenantId": "87027252-d4d0-4e7e-8f29-daff6720b1c0",
+  "projectId": "0de09fff-4245-4c96-b8b7-b74dffa5896e",
+  "simulation": {
+    "durationSec": 60,
+    "httpRequests": 285,
+    "checkoutAttempts": 49,
+    "usersSimulated": 5
+  },
+  "eventCapture": {
+    "total": 211,
+    "bySeverity": {
+      "info": 192,
+      "error": 8,
+      "warn": 7,
+      "fatal": 4
+    },
+    "uniqueFingerprints": 45
+  },
+  "checkoutFunnel": {
+    "attempts": 49,
+    "successful": 37,
+    "errors": 8,
+    "fatals": 4,
+    "successRate": "75.5%"
+  },
+  "topEvents": [
+    {
+      "message": "Product catalogue fetched",
+      "count": 81,
+      "firstSeen": "2026-06-02T11:44:44.045Z",
+      "lastSeen": "2026-06-02T11:45:43.717Z",
+      "fingerprint": "log:Product catalogue fetched",
+      "affectedUsers": []
+    },
+    {
+      "message": "Item added to cart: Mechanical Keyboard ×1",
+      "count": 29,
+      "firstSeen": "2026-06-02T11:44:44.052Z",
+      "lastSeen": "2026-06-02T11:45:42.852Z",
+      "fingerprint": "custom:Item added to cart: Mechanical Keyboard ×1",
+      "affectedUsers": [
+        "usr_004",
+        "usr_003",
+        "usr_002",
+        "usr_001",
+        "usr_005"
+      ]
+    },
+    {
+      "message": "Item added to cart: Desk Mat XL ×1",
+      "count": 15,
+      "firstSeen": "2026-06-02T11:44:48.846Z",
+      "lastSeen": "2026-06-02T11:45:41.431Z",
+      "fingerprint": "custom:Item added to cart: Desk Mat XL ×1",
+      "affectedUsers": [
+        "usr_001",
+        "usr_002",
+        "usr_005",
+        "usr_004",
+        "usr_003"
+      ]
+    },
+    {
+      "message": "Item added to cart: Webcam 4K ×1",
+      "count": 15,
+      "firstSeen": "2026-06-02T11:44:44.563Z",
+      "lastSeen": "2026-06-02T11:45:42.281Z",
+      "fingerprint": "custom:Item added to cart: Webcam 4K ×1",
+      "affectedUsers": [
+        "usr_004",
+        "usr_002",
+        "usr_003",
+        "usr_001",
+        "usr_005"
+      ]
+    },
+    {
+      "message": "Item added to cart: Monitor Stand ×1",
+      "count": 15,
+      "firstSeen": "2026-06-02T11:44:46.019Z",
+      "lastSeen": "2026-06-02T11:45:43.721Z",
+      "fingerprint": "custom:Item added to cart: Monitor Stand ×1",
+      "affectedUsers": [
+        "usr_005",
+        "usr_003",
+        "usr_004",
+        "usr_001",
+        "usr_002"
+      ]
+    },
+    {
+      "message": "Error: PaymentGatewayException: card declined by issuer (code: INSUFFICIENT_FUNDS)",
+      "count": 8,
+      "firstSeen": "2026-06-02T11:44:46.019Z",
+      "lastSeen": "2026-06-02T11:45:36.026Z",
+      "fingerprint": "Error:PaymentGatewayException: card declined by issuer (code: INSUFFICIENT_FUNDS)",
+      "affectedUsers": [
+        "usr_001",
+        "usr_002",
+        "usr_005"
+      ]
+    },
+    {
+      "message": "Out-of-stock product viewed: USB-C Hub",
+      "count": 7,
+      "firstSeen": "2026-06-02T11:44:45.458Z",
+      "lastSeen": "2026-06-02T11:45:40.592Z",
+      "fingerprint": "log:Out-of-stock product viewed: USB-C Hub",
+      "affectedUsers": []
+    },
+    {
+      "message": "Error: DatabaseTimeoutException: query exceeded 5000ms on orders table",
+      "count": 4,
+      "firstSeen": "2026-06-02T11:44:55.825Z",
+      "lastSeen": "2026-06-02T11:45:26.603Z",
+      "fingerprint": "Error:DatabaseTimeoutException: query exceeded 5000ms on orders table",
+      "affectedUsers": [
+        "usr_003",
+        "usr_005",
+        "usr_004",
+        "usr_001"
+      ]
+    },
+    {
+      "message": "Order placed successfully: ORD-00004",
+      "count": 1,
+      "firstSeen": "2026-06-02T11:44:46.614Z",
+      "lastSeen": "2026-06-02T11:44:46.614Z",
+      "fingerprint": "custom:Order placed successfully: ORD-00004",
+      "affectedUsers": [
+        "usr_001"
+      ]
+    },
+    {
+      "message": "Order placed successfully: ORD-00019",
+      "count": 1,
+      "firstSeen": "2026-06-02T11:45:04.744Z",
+      "lastSeen": "2026-06-02T11:45:04.744Z",
+      "fingerprint": "custom:Order placed successfully: ORD-00019",
+      "affectedUsers": [
+        "usr_003"
+      ]
+    }
+  ],
+  "responseTimePercentiles": {
+    "50.0": null,
+    "75.0": null,
+    "95.0": null,
+    "99.0": null
+  },
+  "quota": {
+    "plan": "Enterprise",
+    "eventsThisMonth": 211,
+    "quotaLimit": "10000000",
+    "percentUsed": 0
+  }
+}

@@ -1,0 +1,156 @@
+{
+  "generatedAt": "2026-06-02T13:27:03.046Z",
+  "tenantId": "d81e1200-9d14-4a74-820b-84f980549007",
+  "projectId": "b9f6d5c8-404a-4169-acf9-fddb20ab19e6",
+  "simulation": {
+    "durationSec": 60,
+    "httpRequests": 256,
+    "checkoutAttempts": 33,
+    "usersSimulated": 5
+  },
+  "eventCapture": {
+    "total": 193,
+    "bySeverity": {
+      "info": 170,
+      "warn": 17,
+      "error": 5,
+      "fatal": 1
+    },
+    "uniqueFingerprints": 35
+  },
+  "checkoutFunnel": {
+    "attempts": 33,
+    "successful": 27,
+    "errors": 5,
+    "fatals": 1,
+    "successRate": "81.8%"
+  },
+  "topEvents": [
+    {
+      "message": "Product catalogue fetched",
+      "count": 80,
+      "firstSeen": "2026-06-02T13:25:57.795Z",
+      "lastSeen": "2026-06-02T13:26:57.142Z",
+      "fingerprint": "log:Product catalogue fetched",
+      "affectedUsers": []
+    },
+    {
+      "message": "Out-of-stock product viewed: USB-C Hub",
+      "count": 17,
+      "firstSeen": "2026-06-02T13:25:59.423Z",
+      "lastSeen": "2026-06-02T13:26:52.068Z",
+      "fingerprint": "log:Out-of-stock product viewed: USB-C Hub",
+      "affectedUsers": []
+    },
+    {
+      "message": "Item added to cart: Webcam 4K ×1",
+      "count": 17,
+      "firstSeen": "2026-06-02T13:25:57.801Z",
+      "lastSeen": "2026-06-02T13:26:54.424Z",
+      "fingerprint": "custom:Item added to cart: Webcam 4K ×1",
+      "affectedUsers": [
+        "usr_005",
+        "usr_002",
+        "usr_003",
+        "usr_004",
+        "usr_001"
+      ]
+    },
+    {
+      "message": "Item added to cart: Monitor Stand ×1",
+      "count": 16,
+      "firstSeen": "2026-06-02T13:26:00.410Z",
+      "lastSeen": "2026-06-02T13:26:56.155Z",
+      "fingerprint": "custom:Item added to cart: Monitor Stand ×1",
+      "affectedUsers": [
+        "usr_004",
+        "usr_003",
+        "usr_002",
+        "usr_001",
+        "usr_005"
+      ]
+    },
+    {
+      "message": "Item added to cart: Desk Mat XL ×1",
+      "count": 15,
+      "firstSeen": "2026-06-02T13:25:58.549Z",
+      "lastSeen": "2026-06-02T13:26:57.145Z",
+      "fingerprint": "custom:Item added to cart: Desk Mat XL ×1",
+      "affectedUsers": [
+        "usr_001",
+        "usr_003",
+        "usr_002",
+        "usr_004",
+        "usr_005"
+      ]
+    },
+    {
+      "message": "Item added to cart: Mechanical Keyboard ×1",
+      "count": 15,
+      "firstSeen": "2026-06-02T13:26:03.460Z",
+      "lastSeen": "2026-06-02T13:26:55.255Z",
+      "fingerprint": "custom:Item added to cart: Mechanical Keyboard ×1",
+      "affectedUsers": [
+        "usr_003",
+        "usr_001",
+        "usr_002",
+        "usr_004",
+        "usr_005"
+      ]
+    },
+    {
+      "message": "Error: PaymentGatewayException: card declined by issuer (code: INSUFFICIENT_FUNDS)",
+      "count": 5,
+      "firstSeen": "2026-06-02T13:26:04.315Z",
+      "lastSeen": "2026-06-02T13:26:38.868Z",
+      "fingerprint": "Error:PaymentGatewayException: card declined by issuer (code: INSUFFICIENT_FUNDS)",
+      "affectedUsers": [
+        "usr_004",
+        "usr_003",
+        "usr_005"
+      ]
+    },
+    {
+      "message": "Order placed successfully: ORD-00030",
+      "count": 1,
+      "firstSeen": "2026-06-02T13:26:52.817Z",
+      "lastSeen": "2026-06-02T13:26:52.817Z",
+      "fingerprint": "custom:Order placed successfully: ORD-00030",
+      "affectedUsers": [
+        "usr_003"
+      ]
+    },
+    {
+      "message": "Order placed successfully: ORD-00003",
+      "count": 1,
+      "firstSeen": "2026-06-02T13:26:02.773Z",
+      "lastSeen": "2026-06-02T13:26:02.773Z",
+      "fingerprint": "custom:Order placed successfully: ORD-00003",
+      "affectedUsers": [
+        "usr_002"
+      ]
+    },
+    {
+      "message": "Order placed successfully: ORD-00016",
+      "count": 1,
+      "firstSeen": "2026-06-02T13:26:23.870Z",
+      "lastSeen": "2026-06-02T13:26:23.870Z",
+      "fingerprint": "custom:Order placed successfully: ORD-00016",
+      "affectedUsers": [
+        "usr_004"
+      ]
+    }
+  ],
+  "responseTimePercentiles": {
+    "50.0": null,
+    "75.0": null,
+    "95.0": null,
+    "99.0": null
+  },
+  "quota": {
+    "plan": "LoadTest",
+    "eventsThisMonth": 193,
+    "quotaLimit": "432000000",
+    "percentUsed": 0
+  }
+}

@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { AppContainer } from '../container.js';
+import { ForbiddenError } from '../errors.js';
 
 const METRIC_KEYS = [
   'metrics:events:ingested:total',
@@ -31,7 +32,13 @@ export function metricsRoutes(container: AppContainer): FastifyPluginAsync {
           description: 'Internal operational metrics — not authenticated, firewall-restricted',
         },
       },
-      async (_request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+        // Metrics contain internal counters; restrict to loopback callers only.
+        // A firewall is not a reliable substitute for an application-level check.
+        const ip = request.ip;
+        if (ip !== '127.0.0.1' && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
+          throw new ForbiddenError('Metrics endpoint is only accessible from localhost');
+        }
         const counterValues = await Promise.all(
           METRIC_KEYS.map(async (key) => {
             const val = await container.redis.client.get(key);

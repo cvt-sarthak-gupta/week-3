@@ -35,6 +35,16 @@ export function dashboardRoutes(container: AppContainer): FastifyPluginAsync {
         .catch(() => {});
     }
 
+    async function assertProjectBelongsToTenant(projectId: string, tenantId: string): Promise<void> {
+      const result = await container.pg.query<{ id: string }>(
+        'SELECT id FROM projects WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [projectId, tenantId],
+      );
+      if (result.rows[0] === undefined) {
+        throw new ForbiddenError('Project not found in this tenant');
+      }
+    }
+
     // POST /tenants/:tenantId/projects/:projectId/dashboards
     fastify.post<{ Params: DashboardParams; Body: CreateDashboardBody }>(
       '/tenants/:tenantId/projects/:projectId/dashboards',
@@ -65,6 +75,7 @@ export function dashboardRoutes(container: AppContainer): FastifyPluginAsync {
         const userId = request.user.userId;
 
         await assertMember(userId, tenantId);
+        await assertProjectBelongsToTenant(projectId, tenantId);
 
         if (!request.body.name) {
           throw new ValidationError('name is required');
@@ -104,6 +115,7 @@ export function dashboardRoutes(container: AppContainer): FastifyPluginAsync {
         const userId = request.user.userId;
 
         await assertMember(userId, tenantId);
+        await assertProjectBelongsToTenant(projectId, tenantId);
 
         const dashboards = await container.dashboards.listDashboards(projectId);
         void reply.status(200).send({ dashboards });
