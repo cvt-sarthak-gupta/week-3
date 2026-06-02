@@ -35,7 +35,7 @@ export function reportRoutes(container: AppContainer): FastifyPluginAsync {
 
     async function assertAdmin(userId: string): Promise<void> {
       const result = await container.pg.query<{ role: string }>(
-        `SELECT role FROM users WHERE id = $1 AND role = 'admin' LIMIT 1`,
+        `SELECT role FROM tenant_members WHERE user_id = $1 AND role IN ('owner','admin') LIMIT 1`,
         [userId],
       );
       if (result.rows[0] === undefined) {

@@ -219,9 +219,9 @@ export function searchRoutes(container: AppContainer): FastifyPluginAsync {
               },
               sort: [
                 { occurredAt: { order: 'desc' } },
-                // _shard_doc is a tie-breaker that is stable across shards
-                // for search_after pagination (preferred over _doc in ES 7.12+).
-                { _shard_doc: { order: 'asc' } },
+                // _doc is the correct tiebreaker without a PIT context.
+                // _shard_doc requires PIT; _id requires fielddata (disabled by default).
+                { _doc: { order: 'asc' } },
               ],
               ...(searchAfter !== undefined ? { search_after: searchAfter } : {}),
               track_total_hits: true,
