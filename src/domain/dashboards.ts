@@ -1,24 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { MongoDatabase, DashboardDocument } from '../db/mongo.js';
 import { logger } from '../logger.js';
+import type { CreateDashboardInput, DashboardResult } from '../types/dashboards.js';
 
-export interface CreateDashboardInput {
-  projectId: string;
-  tenantId: string;
-  userId: string;
-  name: string;
-  layout?: unknown[];
-}
-
-export interface DashboardResult {
-  id: string;
-  projectId: string;
-  tenantId: string;
-  name: string;
-  layout: unknown[];
-  createdAt: Date;
-  updatedAt: Date;
-}
+export type { CreateDashboardInput, DashboardResult };
 
 export class DashboardService {
   constructor(private readonly mongo: MongoDatabase) {}

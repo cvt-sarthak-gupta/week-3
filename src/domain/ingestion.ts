@@ -6,24 +6,9 @@ import type { CircuitBreakerRegistry } from '../lib/circuit-breaker.js';
 import { EventIngestSchema, generateFingerprint, type EventIngest } from '../schemas/event.js';
 import type { EventDocument, StackFrame } from '../db/mongo.js';
 import { logger } from '../logger.js';
+import type { IngestPayload, PipelineMetricEntry } from '../types/ingestion.js';
 
-export interface IngestPayload {
-  eventId: string;  // uuidv7, generated at HTTP edge
-  traceId: string;  // generated at HTTP edge
-  projectId: string;
-  tenantId: string;
-  planId: string;
-  raw: EventIngest;
-}
-
-interface PipelineMetricEntry {
-  stage: string;
-  eventId: string;
-  traceId: string;
-  durationMs: number;
-  success: boolean;
-  error?: string;
-}
+export type { IngestPayload };
 
 const MAX_USAGE_RETRIES = 5;
 

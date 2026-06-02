@@ -1,3 +1,14 @@
+import '@fastify/jwt';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { PostgresDatabase } from '../db/postgres.js';
+import type { RedisDatabase } from '../db/redis.js';
+import { config } from '../config.js';
+import { AuthError } from '../errors.js';
+import { logger } from '../logger.js';
+import type { UserTokenPayload, ProjectContext, SignedTokens } from '../types/auth.js';
+
+export type { UserTokenPayload, ProjectContext, SignedTokens };
+
 // Augment @fastify/jwt so that request.user resolves to UserTokenPayload
 // throughout the entire application. This is the official pattern for typed JWT users.
 declare module '@fastify/jwt' {
@@ -7,37 +18,11 @@ declare module '@fastify/jwt' {
   }
 }
 
-import '@fastify/jwt';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { PostgresDatabase } from '../db/postgres.js';
-import type { RedisDatabase } from '../db/redis.js';
-import { config } from '../config.js';
-import { AuthError } from '../errors.js';
-import { logger } from '../logger.js';
-
-export interface UserTokenPayload {
-  userId: string;
-  tenantId: string;
-  email: string;
-  role: string;
-}
-
-export interface ProjectContext {
-  id: string;
-  tenantId: string;
-  apiKey: string;
-}
-
 // Augment FastifyRequest with the project field (user is handled by @fastify/jwt above)
 declare module 'fastify' {
   interface FastifyRequest {
     project?: ProjectContext;
   }
-}
-
-export interface SignedTokens {
-  accessToken: string;
-  refreshToken: string;
 }
 
 interface PgProjectRow {

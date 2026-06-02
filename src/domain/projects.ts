@@ -2,14 +2,9 @@ import { NotFoundError } from '../errors.js';
 import { logger } from '../logger.js';
 import type { PostgresDatabase } from '../db/postgres.js';
 import type { RedisDatabase } from '../db/redis.js';
+import type { ProjectContext } from '../types/projects.js';
 
-export interface ProjectContext {
-  id: string;
-  tenantId: string;
-  planId: string;
-  apiKey: string;
-  retentionDays: number;
-}
+export type { ProjectContext };
 
 const API_KEY_CACHE_PREFIX = 'apikey:';
 const API_KEY_CACHE_TTL = 60; // seconds

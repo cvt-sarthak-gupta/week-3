@@ -5,20 +5,9 @@ import type { PostgresDatabase } from '../db/postgres.js';
 import type { ElasticsearchDatabase } from '../db/elastic.js';
 import { percolatorIndex } from '../db/elastic.js';
 import type { RedisDatabase } from '../db/redis.js';
-import type { AlertRule } from '../schemas/alert.js';
+import type { AlertRule, CreateAlertRuleInput, UpdateAlertRuleInput } from '../types/alerts.js';
 
-export type { AlertRule };
-
-export interface CreateAlertRuleInput {
-  projectId: string;
-  tenantId: string;
-  rule: AlertRule;
-}
-
-export interface UpdateAlertRuleInput {
-  projectId: string;
-  updates: Partial<AlertRule>;
-}
+export type { AlertRule, CreateAlertRuleInput, UpdateAlertRuleInput };
 
 const WEBHOOK_TIMEOUT_MS = 5_000;
 

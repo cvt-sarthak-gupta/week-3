@@ -5,33 +5,9 @@ import { ElasticsearchDatabase } from '../db/elastic.js';
 import { RedisDatabase } from '../db/redis.js';
 import { CacheService } from '../lib/cache.js';
 import { logger } from '../logger.js';
+import type { ErrorIntelligenceReport, TenantQuotaRow } from '../types/reports.js';
 
-export interface ErrorIntelligenceReport {
-  topErrors: Array<{
-    fingerprint: string;
-    message: string;
-    count: number;
-    firstSeen: Date;
-    lastSeen: Date;
-    affectedUsers: string[];
-  }>;
-  hourlyHistogram: Array<{ hour: string; count: number }>;
-  severityBrowserBreakdown: Array<{
-    severity: string;
-    browser: string;
-    count: number;
-  }>;
-  newFingerprints: string[]; // first seen in last 24h
-}
-
-export interface TenantQuotaRow {
-  tenantId: string;
-  tenantName: string;
-  thisMonthEvents: number;
-  prevMonthEvents: number;
-  growthRate: number | null; // null when prev_month is 0
-  rank: number;
-}
+export type { ErrorIntelligenceReport, TenantQuotaRow };
 
 export class ReportService {
   private readonly mongo: MongoDatabase;

@@ -1,24 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import type { AppContainer } from '../container.js';
-
-interface DatastoreChecks {
-  postgres: boolean;
-  mongo: boolean;
-  elasticsearch: boolean;
-  redis: boolean;
-}
-
-interface HealthResponse {
-  ok: boolean;
-  checks: DatastoreChecks;
-  timestamp: string;
-}
-
-interface ReadyCheck {
-  ok: boolean;
-  latencyMs: number;
-}
+import type { DatastoreChecks, HealthResponse, ReadyCheck } from '../types/health.js';
 
 const HEALTH_TIMEOUT_MS = 200;
 

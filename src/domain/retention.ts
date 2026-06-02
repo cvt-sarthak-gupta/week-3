@@ -1,13 +1,9 @@
 import { PostgresDatabase } from '../db/postgres.js';
 import { MongoDatabase } from '../db/mongo.js';
 import { logger } from '../logger.js';
+import type { RetentionJobResult } from '../types/retention.js';
 
-export interface RetentionJobResult {
-  projectsProcessed: number;
-  documentsDeleted: number;
-  errors: number;
-  durationMs: number;
-}
+export type { RetentionJobResult };
 
 interface ProjectRetentionRow {
   project_id: string;

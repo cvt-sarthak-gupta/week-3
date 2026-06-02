@@ -2,17 +2,9 @@ import { nanoid } from 'nanoid';
 import { logger } from '../logger.js';
 import type { RedisDatabase } from '../db/redis.js';
 import type { PostgresDatabase } from '../db/postgres.js';
+import type { RateLimitResult, RateLimitConfig } from '../types/rate-limit.js';
 
-export interface RateLimitResult {
-  allowed: boolean;
-  remaining: number;
-  resetAt: number; // Unix timestamp ms
-}
-
-export interface RateLimitConfig {
-  windowMs: number;
-  maxRequests: number;
-}
+export type { RateLimitResult, RateLimitConfig };
 
 const PLAN_CACHE_TTL = 60_000;
 
